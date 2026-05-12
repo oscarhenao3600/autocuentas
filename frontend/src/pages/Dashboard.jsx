@@ -1,5 +1,5 @@
 import React from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { LogOut, User, Settings, FileText, Upload, AlertCircle, ChevronRight } from 'lucide-react';
@@ -14,10 +14,7 @@ const Dashboard = () => {
     React.useEffect(() => {
         const fetchContract = async () => {
             try {
-                const token = JSON.parse(localStorage.getItem('user'))?.token;
-                const { data } = await axios.get('http://localhost:5000/api/contracts', {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
+                const { data } = await api.get('/contracts');
                 setContract(data);
             } catch (err) {
                 // Not set up yet
@@ -82,13 +79,13 @@ const Dashboard = () => {
                                     <Settings size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
                                     <h3 style={{ marginBottom: '0.5rem' }}>Configurar Formatos</h3>
                                     <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Gestiona las plantillas de Word y PDF para las cuentas de cobro.</p>
-                                    <button className="btn btn-primary" style={{ width: '100%' }}>Ir a Configuración</button>
+                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/formats')}>Ir a Configuración</button>
                                 </div>
                                 <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
                                     <FileText size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
                                     <h3 style={{ marginBottom: '0.5rem' }}>Cuentas Pendientes</h3>
                                     <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Revisa las cuentas de cobro generadas por los contratistas.</p>
-                                    <button className="btn btn-primary" style={{ width: '100%' }}>Ver Cuentas</button>
+                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/accounts')}>Ver Cuentas</button>
                                 </div>
                             </>
                         ) : (
@@ -117,7 +114,7 @@ const Dashboard = () => {
                                     <FileText size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
                                     <h3 style={{ marginBottom: '0.5rem' }}>Mis Documentos</h3>
                                     <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Descarga tus cuentas de cobro generadas anteriormente.</p>
-                                    <button className="btn btn-primary" style={{ width: '100%' }}>Ver Mis Archivos</button>
+                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/my-documents')}>Ver Mis Archivos</button>
                                 </div>
                             </>
                         )}

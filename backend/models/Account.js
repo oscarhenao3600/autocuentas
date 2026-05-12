@@ -27,6 +27,7 @@ const accountSchema = new mongoose.Schema({
         enum: ['pending', 'approved', 'rejected'],
         default: 'pending'
     },
+    generatedDocumentPath: String,
     createdAt: {
         type: Date,
         default: Date.now

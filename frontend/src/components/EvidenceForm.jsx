@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText, Calendar, Plus, Trash2 } from 'lucide-react';
 
@@ -41,7 +41,6 @@ const EvidenceForm = ({ onComplete }) => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         
-        const token = JSON.parse(localStorage.getItem('user'))?.token;
         const formDataToSend = new FormData();
         formDataToSend.append('activity', formData.activity);
         formDataToSend.append('date', formData.date);
@@ -52,10 +51,9 @@ const EvidenceForm = ({ onComplete }) => {
         });
 
         try {
-            const response = await axios.post('http://localhost:5000/api/accounts', formDataToSend, {
+            const response = await api.post('/accounts', formDataToSend, {
                 headers: {
-                    'Content-Type': 'multipart/form-data',
-                    'Authorization': `Bearer ${token}`
+                    'Content-Type': 'multipart/form-data'
                 }
             });
             onComplete(response.data);

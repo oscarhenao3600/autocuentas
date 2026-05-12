@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 import { motion } from 'framer-motion';
 import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info } from 'lucide-react';
 
@@ -16,10 +16,7 @@ const ContractSetup = () => {
 
     const fetchContract = async () => {
         try {
-            const token = JSON.parse(localStorage.getItem('user'))?.token;
-            const { data } = await axios.get('http://localhost:5000/api/contracts', {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            const { data } = await api.get('/contracts');
             setContract(data);
         } catch (err) {
             // No contract found yet, that's fine
@@ -36,11 +33,9 @@ const ContractSetup = () => {
         setExtracting(true);
         setError('');
         try {
-            const token = JSON.parse(localStorage.getItem('user'))?.token;
-            const { data } = await axios.post('http://localhost:5000/api/contracts/upload-base', formData, {
+            const { data } = await api.post('/contracts/upload-base', formData, {
                 headers: { 
-                    'Content-Type': 'multipart/form-data',
-                    Authorization: `Bearer ${token}` 
+                    'Content-Type': 'multipart/form-data'
                 }
             });
             setContract(data.data);
@@ -61,6 +56,25 @@ const ContractSetup = () => {
             setLoading(false);
             setSuccess('Datos guardados correctamente.');
         }, 1000);
+    };
+
+    const handleAttachmentUpload = async (e, type) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append(type, file);
+
+        try {
+            const { data } = await api.post('/contracts/upload-attachments', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            setContract(data.data);
+            setSuccess('Anexo subido correctamente.');
+            setTimeout(() => setSuccess(''), 3000);
+        } catch (err) {
+            setError('Error al subir anexo: ' + (err.response?.data?.message || err.message));
+        }
     };
 
     return (
@@ -133,15 +147,24 @@ const ContractSetup = () => {
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                                     <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>RUT Actualizado</p>
-                                    <button type="button" className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)' }}>{contract.rutPath ? 'Actualizar' : 'Subir PDF'}</button>
+                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
+                                        {contract.rutPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'rut')} accept=".pdf" />
+                                    </label>
                                 </div>
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                                     <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Certificado Bancario</p>
-                                    <button type="button" className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)' }}>{contract.bankCertificatePath ? 'Actualizar' : 'Subir PDF'}</button>
+                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
+                                        {contract.bankCertificatePath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'bankCertificate')} accept=".pdf,.jpg,.jpeg,.png" />
+                                    </label>
                                 </div>
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                                     <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Seguridad Social</p>
-                                    <button type="button" className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)' }}>{contract.securitySocialPath ? 'Actualizar' : 'Subir PDF'}</button>
+                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
+                                        {contract.securitySocialPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'securitySocial')} accept=".pdf" />
+                                    </label>
                                 </div>
                             </div>
                         </div>

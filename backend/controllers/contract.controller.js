@@ -42,3 +42,27 @@ exports.getContract = async (req, res) => {
         res.status(500).json({ message: 'Error al obtener contrato', error: error.message });
     }
 };
+
+exports.uploadAttachments = async (req, res) => {
+    try {
+        const contract = await Contract.findOne({ user: req.user._id });
+        if (!contract) {
+            return res.status(404).json({ message: 'Primero debe configurar su contrato base' });
+        }
+
+        const updates = {};
+        if (req.files.rut) updates.rutPath = req.files.rut[0].path;
+        if (req.files.bankCertificate) updates.bankCertificatePath = req.files.bankCertificate[0].path;
+        if (req.files.securitySocial) updates.securitySocialPath = req.files.securitySocial[0].path;
+
+        Object.assign(contract, updates);
+        await contract.save();
+
+        res.json({
+            message: 'Anexos actualizados con éxito',
+            data: contract
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error al subir anexos', error: error.message });
+    }
+};

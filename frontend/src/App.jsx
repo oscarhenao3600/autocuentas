@@ -5,6 +5,9 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import ContractSetup from './pages/ContractSetup';
+import MyDocuments from './pages/MyDocuments';
+import PendingAccounts from './pages/PendingAccounts';
+import ConfigureFormats from './pages/ConfigureFormats';
 
 const ProtectedRoute = ({ children }) => {
     const { user, loading } = useAuth();
@@ -33,6 +36,30 @@ function App() {
                         element={
                             <ProtectedRoute>
                                 <Dashboard />
+                            </ProtectedRoute>
+                        } 
+                    />
+                    <Route 
+                        path="/my-documents" 
+                        element={
+                            <ProtectedRoute>
+                                <MyDocuments />
+                            </ProtectedRoute>
+                        } 
+                    />
+                    <Route 
+                        path="/admin/accounts" 
+                        element={
+                            <ProtectedRoute>
+                                <PendingAccounts />
+                            </ProtectedRoute>
+                        } 
+                    />
+                    <Route 
+                        path="/admin/formats" 
+                        element={
+                            <ProtectedRoute>
+                                <ConfigureFormats />
                             </ProtectedRoute>
                         } 
                     />
