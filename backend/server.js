@@ -15,6 +15,18 @@ app.use(cors({
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' })); // Limit body size to prevent DoS
+
+// Workaround for express-mongo-sanitize incompatibility with Express 5 (req.query is a getter-only property)
+app.use((req, res, next) => {
+    Object.defineProperty(req, 'query', {
+        value: { ...req.query },
+        writable: true,
+        configurable: true,
+        enumerable: true
+    });
+    next();
+});
+
 app.use(mongoSanitize()); // Prevent NoSQL injection
 
 // Rate Limiting to prevent brute force

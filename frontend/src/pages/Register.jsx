@@ -2,14 +2,13 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { UserPlus, Mail, Lock, User, Shield, Briefcase } from 'lucide-react';
+import { UserPlus, Mail, Lock, User } from 'lucide-react';
 
 const Register = () => {
     const [formData, setFormData] = useState({
         fullName: '',
         email: '',
-        password: '',
-        role: 'client'
+        password: ''
     });
     const [error, setError] = useState('');
     const { register } = useAuth();
@@ -107,52 +106,7 @@ const Register = () => {
                         </div>
                     </div>
 
-                    <div className="form-group">
-                        <label className="label">Tipo de Usuario</label>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                            <div 
-                                onClick={() => setFormData({ ...formData, role: 'client' })}
-                                style={{ 
-                                    padding: '0.75rem', 
-                                    border: '1px solid', 
-                                    borderColor: formData.role === 'client' ? 'var(--primary)' : 'var(--border)',
-                                    borderRadius: 'var(--radius-md)',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    background: formData.role === 'client' ? 'rgba(37, 99, 235, 0.05)' : 'transparent',
-                                    transition: 'all 0.2s'
-                                }}
-                            >
-                                <Briefcase size={16} color={formData.role === 'client' ? 'var(--primary)' : 'var(--text-muted)'} />
-                                <span style={{ fontSize: '0.875rem', color: formData.role === 'client' ? 'var(--primary)' : 'var(--text-main)' }}>Cliente</span>
-                            </div>
-                            <div 
-                                onClick={() => setFormData({ ...formData, role: 'admin' })}
-                                style={{ 
-                                    padding: '0.75rem', 
-                                    border: '1px solid', 
-                                    borderColor: formData.role === 'admin' ? 'var(--primary)' : 'var(--border)',
-                                    borderRadius: 'var(--radius-md)',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    background: formData.role === 'admin' ? 'rgba(37, 99, 235, 0.05)' : 'transparent',
-                                    transition: 'all 0.2s'
-                                }}
-                            >
-                                <Shield size={16} color={formData.role === 'admin' ? 'var(--primary)' : 'var(--text-muted)'} />
-                                <span style={{ fontSize: '0.875rem', color: formData.role === 'admin' ? 'var(--primary)' : 'var(--text-main)' }}>Administrador</span>
-                            </div>
-                        </div>
-                        {formData.role === 'admin' && (
-                            <p style={{ fontSize: '0.75rem', color: 'var(--accent)', marginTop: '0.5rem' }}>* Sujeto a disponibilidad (Máx. 5 administradores)</p>
-                        )}
-                    </div>
-
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem', gap: '0.5rem' }}>
+                    <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1.5rem', gap: '0.5rem' }}>
                         <UserPlus size={18} />
                         Crear Cuenta
                     </button>

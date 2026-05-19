@@ -21,6 +21,8 @@ const contractSchema = new mongoose.Schema({
     bankName: String,
     accountNumber: String,
     paymentMethod: String,
+    monthlyValue: String,
+    contractObject: String,
     baseDocumentPath: String,
     rutPath: String,
     bankCertificatePath: String,

@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { motion } from 'framer-motion';
-import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info } from 'lucide-react';
+import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const ContractSetup = () => {
+    const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
     const [extracting, setExtracting] = useState(false);
     const [contract, setContract] = useState(null);
@@ -50,12 +52,17 @@ const ContractSetup = () => {
     const handleSave = async (e) => {
         e.preventDefault();
         setLoading(true);
-        // Implementation for saving manual corrections could go here
-        // For now, let's just simulate success
-        setTimeout(() => {
+        setError('');
+        setSuccess('');
+        try {
+            const { data } = await api.put('/contracts', contract);
+            setContract(data.data);
+            setSuccess('Datos del contrato guardados correctamente en la base de datos.');
+        } catch (err) {
+            setError('Error al guardar datos del contrato: ' + (err.response?.data?.message || err.message));
+        } finally {
             setLoading(false);
-            setSuccess('Datos guardados correctamente.');
-        }, 1000);
+        }
     };
 
     const handleAttachmentUpload = async (e, type) => {
@@ -85,6 +92,27 @@ const ContractSetup = () => {
                 className="glass"
                 style={{ padding: '2.5rem', borderRadius: 'var(--radius-lg)' }}
             >
+                <button 
+                    onClick={() => navigate('/dashboard')} 
+                    className="btn" 
+                    style={{ 
+                        display: 'inline-flex', 
+                        alignItems: 'center', 
+                        gap: '0.5rem', 
+                        marginBottom: '1.5rem', 
+                        background: 'transparent', 
+                        border: '1px solid var(--border)', 
+                        color: 'var(--text-main)', 
+                        padding: '0.5rem 1rem', 
+                        fontSize: '0.875rem',
+                        cursor: 'pointer',
+                        borderRadius: 'var(--radius-md)',
+                        transition: 'all 0.2s'
+                    }}
+                >
+                    <ArrowLeft size={16} />
+                    Volver al Panel
+                </button>
                 <header style={{ marginBottom: '2rem' }}>
                     <h1 style={{ fontSize: '1.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <FileText color="var(--primary)" />

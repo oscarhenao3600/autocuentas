@@ -5,7 +5,7 @@ services:
     image: mongo:latest
     container_name: formatos_cuentas_db
     ports:
-      - "27017:27017"
+      - "27019:27017"
     volumes:
       - mongodb_data:/data/db
     restart: unless-stopped

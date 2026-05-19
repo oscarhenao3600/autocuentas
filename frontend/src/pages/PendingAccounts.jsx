@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { motion } from 'framer-motion';
-import { FileText, CheckCircle, XCircle, Search, Clock, Eye, Download } from 'lucide-react';
+import { FileText, CheckCircle, XCircle, Search, Clock, Eye, Download, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const PendingAccounts = () => {
+    const navigate = useNavigate();
     const [accounts, setAccounts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
@@ -41,6 +43,27 @@ const PendingAccounts = () => {
     return (
         <div className="container" style={{ padding: '2rem 0' }}>
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                <button 
+                    onClick={() => navigate('/dashboard')} 
+                    className="btn" 
+                    style={{ 
+                        display: 'inline-flex', 
+                        alignItems: 'center', 
+                        gap: '0.5rem', 
+                        marginBottom: '1.5rem', 
+                        background: 'transparent', 
+                        border: '1px solid var(--border)', 
+                        color: 'var(--text-main)', 
+                        padding: '0.5rem 1rem', 
+                        fontSize: '0.875rem',
+                        cursor: 'pointer',
+                        borderRadius: 'var(--radius-md)',
+                        transition: 'all 0.2s'
+                    }}
+                >
+                    <ArrowLeft size={16} />
+                    Volver al Panel
+                </button>
                 <header style={{ marginBottom: '2rem' }}>
                     <h1 style={{ fontSize: '1.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <FileText color="var(--primary)" />

@@ -66,3 +66,34 @@ exports.uploadAttachments = async (req, res) => {
         res.status(500).json({ message: 'Error al subir anexos', error: error.message });
     }
 };
+
+exports.updateContract = async (req, res) => {
+    try {
+        let contract = await Contract.findOne({ user: req.user._id });
+        if (!contract) {
+            contract = new Contract({ user: req.user._id });
+        }
+
+        const allowedFields = [
+            'contractorName', 'idNumber', 'contractType', 'contractNumber',
+            'startDate', 'endDate', 'cdp', 'rp', 'rubro', 'totalValue',
+            'paymentValue', 'bankName', 'accountNumber', 'paymentMethod',
+            'monthlyValue', 'contractObject'
+        ];
+
+        allowedFields.forEach(field => {
+            if (req.body[field] !== undefined) {
+                contract[field] = req.body[field];
+            }
+        });
+
+        await contract.save();
+
+        res.json({
+            message: 'Contrato actualizado con éxito',
+            data: contract
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error al actualizar el contrato', error: error.message });
+    }
+};

@@ -9,14 +9,21 @@ exports.extractContractData = async (filePath) => {
     try {
         const dataBuffer = fs.readFileSync(filePath);
         let text = "";
+        let useMultimodal = false;
 
         if (filePath.endsWith('.pdf')) {
-            const data = await pdf(dataBuffer);
-            text = data.text;
+            try {
+                const data = await pdf(dataBuffer);
+                text = data.text;
+                if (!text || text.trim().length < 150) {
+                    useMultimodal = true;
+                }
+            } catch (err) {
+                console.warn("pdf-parse falló, usando Gemini multimodal OCR:", err.message);
+                useMultimodal = true;
+            }
         } else {
-            // For docx or other text files, we might need mammoth, but let's assume PDF for the contract base for now
-            // Or we can use Gemini's file upload if supported, but text extraction is more reliable for simple data
-            text = dataBuffer.toString(); 
+            text = dataBuffer.toString();
         }
 
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
@@ -36,16 +43,27 @@ exports.extractContractData = async (filePath) => {
             - rp (Número de Registro Presupuestal - RP, si aparece)
             - rubro (Código o Rubro Presupuestal, si aparece)
             - totalValue (Valor total del contrato, en letras y/o números)
-            - paymentValue (Valor mensual o cuota a pagar, si especifica forma de pago fraccionada)
+            - monthlyValue (Valor mensual o cuota a pagar, si especifica forma de pago fraccionada, en número o texto)
             - bankName (Nombre de la entidad bancaria)
             - accountNumber (Número de cuenta bancaria)
             - paymentMethod (Forma de pago, ej: Transferencia electrónica, consignación)
-
-            Texto del contrato:
-            ${text.substring(0, 20000)} // Limit text to avoid token limits
+            - contractObject (Objeto del contrato, descripción de las actividades o servicios prestados)
         `;
 
-        const result = await model.generateContent(prompt);
+        let result;
+        if (useMultimodal && filePath.endsWith('.pdf')) {
+            console.log("Detectado PDF escaneado (imagen). Usando modo multimodal de Gemini para OCR...");
+            const pdfPart = {
+                inlineData: {
+                    data: dataBuffer.toString("base64"),
+                    mimeType: "application/pdf"
+                }
+            };
+            result = await model.generateContent([prompt, pdfPart]);
+        } else {
+            result = await model.generateContent(`${prompt}\n\nTexto del contrato:\n${text.substring(0, 30000)}`);
+        }
+
         const response = await result.response;
         const jsonText = response.text().replace(/```json|```/g, "").trim();
         

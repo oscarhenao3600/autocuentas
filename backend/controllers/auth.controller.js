@@ -9,7 +9,7 @@ const generateToken = (id) => {
 
 exports.register = async (req, res) => {
     try {
-        const { fullName, email, password, role } = req.body;
+        const { fullName, email, password } = req.body;
 
         // Check if user exists
         const userExists = await User.findOne({ email });
@@ -17,8 +17,12 @@ exports.register = async (req, res) => {
             return res.status(400).json({ message: 'El usuario ya existe' });
         }
 
+        // Check if this is the first user in the database to assign 'admin', else 'client'
+        const totalUsers = await User.countDocuments({});
+        const assignedRole = totalUsers === 0 ? 'admin' : 'client';
+
         // Check admin limit if registering as admin
-        if (role === 'admin') {
+        if (assignedRole === 'admin') {
             const canRegister = await User.canRegisterAdmin();
             if (!canRegister) {
                 return res.status(400).json({ message: 'Se ha alcanzado el límite máximo de 5 administradores' });
@@ -29,7 +33,7 @@ exports.register = async (req, res) => {
             fullName,
             email,
             password,
-            role: role || 'client'
+            role: assignedRole
         });
 
         if (user) {
