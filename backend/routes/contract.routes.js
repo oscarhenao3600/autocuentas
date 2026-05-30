@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { uploadBaseContract, getContract, uploadAttachments, updateContract } = require('../controllers/contract.controller');
+const { uploadBaseContract, getContract, uploadAttachments, updateContract, uploadRp, uploadAdditionContract, uploadAdditionRp } = require('../controllers/contract.controller');
 const { protect } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
 
@@ -15,4 +15,14 @@ router.post('/upload-attachments', protect, upload.fields([
     { name: 'securitySocial', maxCount: 1 }
 ]), uploadAttachments);
 
+// Upload and process Registro Presupuestal (RP) with Gemini AI
+router.post('/upload-rp', protect, upload.single('rpFile'), uploadRp);
+
+// Upload and process Modificatorio / Adición (PDF) with Gemini AI
+router.post('/upload-addition', protect, upload.single('additionFile'), uploadAdditionContract);
+
+// Upload and process Registro Presupuestal (RP) de la adición
+router.post('/upload-addition-rp', protect, upload.single('additionRpFile'), uploadAdditionRp);
+
 module.exports = router;
+

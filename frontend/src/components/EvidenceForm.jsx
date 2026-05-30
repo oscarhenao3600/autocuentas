@@ -3,7 +3,7 @@ import api from '../utils/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText, Calendar, Plus, Trash2 } from 'lucide-react';
 
-const EvidenceForm = ({ onComplete }) => {
+const EvidenceForm = ({ onComplete, contract }) => {
     const [step, setStep] = useState(1);
     const [formData, setFormData] = useState({
         activity: '',
@@ -12,13 +12,7 @@ const EvidenceForm = ({ onComplete }) => {
         files: []
     });
 
-    const activities = [
-        "Desarrollo de Software",
-        "Mantenimiento de Servidores",
-        "Soporte Técnico",
-        "Capacitación de Personal",
-        "Elaboración de Informes"
-    ];
+    const activities = contract?.activities || [];
 
     const nextStep = () => setStep(s => s + 1);
     const prevStep = () => setStep(s => s - 1);
@@ -103,6 +97,11 @@ const EvidenceForm = ({ onComplete }) => {
                                     <option value="">-- Seleccionar --</option>
                                     {activities.map(a => <option key={a} value={a}>{a}</option>)}
                                 </select>
+                                {activities.length === 0 && (
+                                    <p style={{ color: 'var(--error)', fontSize: '0.825rem', marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                        ⚠️ No has configurado actividades en tu minuta. Ve a "Configuración de Contrato Base" para agregarlas.
+                                    </p>
+                                )}
                             </div>
                             <div className="form-group">
                                 <label className="label">Fecha de Realización</label>

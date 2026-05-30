@@ -51,10 +51,11 @@ app.use('/generated', express.static(path.join(__dirname, 'generated')));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
-app.use('/api/auth', require('./routes/auth.routes'));
-app.use('/api/accounts', require('./routes/account.routes'));
+app.use('/api/auth',      require('./routes/auth.routes'));
+app.use('/api/accounts',  require('./routes/account.routes'));
 app.use('/api/contracts', require('./routes/contract.routes'));
-app.use('/api/admin', require('./routes/admin.routes'));
+app.use('/api/admin',     require('./routes/admin.routes'));
+app.use('/api/billing',   require('./routes/billing.routes'));
 
 app.get('/', (req, res) => {
     res.send('Formatos Cuentas API is running securely.');
@@ -72,4 +73,11 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
+    // Start Telegram Bot Service if token is available
+    if (process.env.TELEGRAM_BOT_TOKEN) {
+        const { startTelegramPolling } = require('./services/telegram.service');
+        startTelegramPolling();
+    } else {
+        console.log('ℹ️ Telegram Bot service not active (TELEGRAM_BOT_TOKEN missing in .env)');
+    }
 });

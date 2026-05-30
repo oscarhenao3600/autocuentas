@@ -1,5 +1,5 @@
 const Contract = require('../models/Contract');
-const { extractContractData } = require('../services/gemini.service');
+const { extractContractData, extractRpData } = require('../services/gemini.service');
 
 exports.uploadBaseContract = async (req, res) => {
     try {
@@ -78,7 +78,10 @@ exports.updateContract = async (req, res) => {
             'contractorName', 'idNumber', 'contractType', 'contractNumber',
             'startDate', 'endDate', 'cdp', 'rp', 'rubro', 'totalValue',
             'paymentValue', 'bankName', 'accountNumber', 'paymentMethod',
-            'monthlyValue', 'contractObject'
+            'monthlyValue', 'contractObject', 'activities',
+            'periodType', 'initialDurationMonths', 'additionDurationMonths', 'hasAddition',
+            'additionValue', 'additionValueWord', 'additionStartDate', 'additionEndDate',
+            'additionCdp', 'additionRp', 'additionRubro', 'additionDuration'
         ];
 
         allowedFields.forEach(field => {
@@ -97,3 +100,110 @@ exports.updateContract = async (req, res) => {
         res.status(500).json({ message: 'Error al actualizar el contrato', error: error.message });
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/contracts/upload-rp  →  Process Registro Presupuestal with Gemini
+// ──────────────────────────────────────────────────────────────
+exports.uploadRp = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Por favor suba el documento del Registro Presupuestal (RP)' });
+        }
+
+        // Extract RP data with Gemini AI
+        const rpData = await extractRpData(req.file.path);
+
+        // Find (or create) the user's contract and patch the RP fields
+        let contract = await Contract.findOne({ user: req.user._id });
+        if (!contract) {
+            return res.status(400).json({ message: 'Primero debe subir el contrato base antes de cargar el RP' });
+        }
+
+        if (rpData.rpNumber)  contract.rp    = rpData.rpNumber;
+        if (rpData.cdpNumber) contract.cdp   = rpData.cdpNumber;
+        if (rpData.rubro)     contract.rubro  = rpData.rubro;
+        if (rpData.rpDate)    contract.rpDate = rpData.rpDate;
+
+        await contract.save();
+
+        res.json({
+            message: 'Registro Presupuestal procesado con éxito por la IA',
+            extracted: rpData,
+            data: contract
+        });
+    } catch (error) {
+        console.error('Error uploadRp:', error);
+        res.status(500).json({ message: 'Error al procesar el RP', error: error.message });
+    }
+};
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/contracts/upload-addition  →  Process Modificatorio PDF with Gemini
+// ──────────────────────────────────────────────────────────────
+exports.uploadAdditionContract = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Por favor suba el documento modificatorio de la adición' });
+        }
+
+        // 1. Extract data with Gemini
+        const extractedData = await extractAdditionContractData(req.file.path);
+
+        // 2. Save or Update in DB
+        let contract = await Contract.findOne({ user: req.user._id });
+
+        if (!contract) {
+            return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar una adición' });
+        }
+
+        Object.assign(contract, extractedData, { 
+            hasAddition: true,
+            additionDocumentPath: req.file.path 
+        });
+        await contract.save();
+
+        res.json({
+            message: 'Modificatorio de adición procesado con éxito por la IA',
+            data: contract
+        });
+    } catch (error) {
+        console.error('Error uploadAdditionContract:', error);
+        res.status(500).json({ message: 'Error al procesar la adición', error: error.message });
+    }
+};
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/contracts/upload-addition-rp  →  Process RP de Adición with Gemini
+// ──────────────────────────────────────────────────────────────
+exports.uploadAdditionRp = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Por favor suba el documento del Registro Presupuestal (RP) de la adición' });
+        }
+
+        // Extract RP data with Gemini AI
+        const rpData = await extractRpData(req.file.path);
+
+        // Find the user's contract and patch the addition RP fields
+        let contract = await Contract.findOne({ user: req.user._id });
+        if (!contract) {
+            return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar el RP de adición' });
+        }
+
+        if (rpData.rpNumber)  contract.additionRp    = rpData.rpNumber;
+        if (rpData.cdpNumber) contract.additionCdp   = rpData.cdpNumber;
+        if (rpData.rubro)     contract.additionRubro  = rpData.rubro;
+
+        await contract.save();
+
+        res.json({
+            message: 'Registro Presupuestal de la adición procesado con éxito por la IA',
+            extracted: rpData,
+            data: contract
+        });
+    } catch (error) {
+        console.error('Error uploadAdditionRp:', error);
+        res.status(500).json({ message: 'Error al procesar el RP de la adición', error: error.message });
+    }
+};
+

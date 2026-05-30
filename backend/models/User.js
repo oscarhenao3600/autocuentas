@@ -25,6 +25,14 @@ const userSchema = new mongoose.Schema({
         enum: ['admin', 'client'],
         default: 'client'
     },
+    telegramChatId: {
+        type: String,
+        default: null
+    },
+    telegramVerificationCode: {
+        type: String,
+        default: null
+    },
     createdAt: {
         type: Date,
         default: Date.now

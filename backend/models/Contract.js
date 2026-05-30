@@ -23,6 +23,56 @@ const contractSchema = new mongoose.Schema({
     paymentMethod: String,
     monthlyValue: String,
     contractObject: String,
+    activities: {
+        type: [String],
+        default: []
+    },
+    supervisorName: {
+        type: String,
+        default: ""
+    },
+    cutoffDay: {
+        type: Number,
+        default: 25
+    },
+    totalValueWord: {
+        type: String,
+        default: ""
+    },
+    monthlyValueWord: {
+        type: String,
+        default: ""
+    },
+    ibcValue: {
+        type: Number,
+        default: 0
+    },
+    periodType: {
+        type: String,
+        enum: ['mes_cumplido', '30_dias'],
+        default: 'mes_cumplido'
+    },
+    initialDurationMonths: {
+        type: Number,
+        default: 4
+    },
+    additionDurationMonths: {
+        type: Number,
+        default: 0
+    },
+    hasAddition: {
+        type: Boolean,
+        default: false
+    },
+    additionValue: String,
+    additionValueWord: String,
+    additionStartDate: String,
+    additionEndDate: String,
+    additionCdp: String,
+    additionRp: String,
+    additionRubro: String,
+    additionDuration: String,
+    additionDocumentPath: String,
     baseDocumentPath: String,
     rutPath: String,
     bankCertificatePath: String,
@@ -35,3 +85,4 @@ const contractSchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('Contract', contractSchema);
+
