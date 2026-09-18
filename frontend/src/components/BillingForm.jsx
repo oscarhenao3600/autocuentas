@@ -147,10 +147,42 @@ export default function BillingForm({ contract, onComplete }) {
         }))
     );
 
-    const [ss, setSs] = useState({
+        const [ss, setSs] = useState({
         operator: '', planillaNumber: '', totalPaid: '',
         saludPaid: '', pensionPaid: '', arlPaid: '', period: ''
     });
+
+    const [uploadingPlanilla, setUploadingPlanilla] = useState(false);
+
+    const handlePlanillaUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('planillaFile', file);
+
+        setUploadingPlanilla(true);
+        setError('');
+        try {
+            const { data } = await api.post('/billing/upload-planilla', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            const ext = data.data;
+            setSs({
+                operator: ext.operator || '',
+                planillaNumber: ext.planillaNumber || '',
+                period: ext.period || '',
+                totalPaid: ext.totalPaid || '',
+                saludPaid: ext.saludPaid || '',
+                pensionPaid: ext.pensionPaid || '',
+                arlPaid: ext.arlPaid || ''
+            });
+        } catch (err) {
+            setError('Error al procesar la planilla de seguridad social: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setUploadingPlanilla(false);
+        }
+    };
 
     // ── Step navigation ─────────────────────────────────────
     const next = () => setStep(s => Math.min(s + 1, 4));
@@ -430,6 +462,39 @@ export default function BillingForm({ contract, onComplete }) {
                             <h2 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <Shield size={22} color="var(--primary)" /> Aportes a Seguridad Social
                             </h2>
+
+                            {/* Zona de Carga Inteligente de Planilla */}
+                            <div style={{ 
+                                padding: '1.25rem', 
+                                border: '1px dashed var(--primary)', 
+                                borderRadius: 'var(--radius-md)', 
+                                background: 'rgba(79, 70, 229, 0.03)',
+                                marginBottom: '1.5rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                textAlign: 'center'
+                            }}>
+                                <p style={{ fontSize: '0.875rem', fontWeight: 600, margin: 0 }}>
+                                    🚀 Carga de Planilla Inteligente por IA
+                                </p>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, maxWidth: '480px' }}>
+                                    Sube tu planilla de aportes de seguridad social (PDF) de este mes para que la IA extraiga el operador, planilla, periodo y valores pagados automáticamente.
+                                </p>
+                                <label className="btn" style={{ 
+                                    fontSize: '0.8rem', 
+                                    background: 'var(--primary)', 
+                                    color: 'white', 
+                                    cursor: 'pointer',
+                                    padding: '0.5rem 1rem',
+                                    borderRadius: 'var(--radius-md)',
+                                    opacity: uploadingPlanilla ? 0.7 : 1
+                                }}>
+                                    {uploadingPlanilla ? '⏳ Procesando Planilla...' : 'Subir Planilla del Mes (PDF)'}
+                                    <input type="file" style={{ display: 'none' }} onChange={handlePlanillaUpload} accept=".pdf" disabled={uploadingPlanilla} />
+                                </label>
+                            </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
                                 <div className="form-group">

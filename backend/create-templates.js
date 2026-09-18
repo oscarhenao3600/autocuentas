@@ -188,9 +188,44 @@ function createRetencionFuente() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 3. FORMATO DESCUENTO DE ESTAMPILLAS
+// ─────────────────────────────────────────────────────────────────────────────
+function createDescuentoEstampillas() {
+    const ps = [
+        para('ALCALDÍA DE ARMENIA – QUINDÍO', { bold: true, center: true, size: 28 }),
+        para('SECRETARÍA DE HACIENDA MUNICIPAL', { bold: true, center: true, size: 26 }),
+        blank(),
+        para('AUTORIZACIÓN DESCUENTO DE ESTAMPILLAS', { bold: true, center: true, size: 28 }),
+        blank(),
+        para('Ciudad y Fecha: Armenia, {periodTo}'),
+        blank(),
+        para('Señores:'),
+        para('SECRETARÍA DE HACIENDA MUNICIPAL'),
+        para('Municipio de Armenia'),
+        blank(),
+        para('Asunto: Autorización Descuento de Estampillas'),
+        blank(),
+        para('Yo, {contractorName}, identificado con la Cédula de Ciudadanía N° {idNumber}, autorizo de manera expresa y voluntaria al Municipio de Armenia para que realice los respectivos descuentos por concepto de estampillas (Pro-Desarrollo, Pro-Hospital, Pro-Cultura, Pro-Bienestar del Adulto Mayor) que se lleguen a causar con ocasión de la ejecución de mi contrato N° {contractNumber} de tipo {contractType}, cuyo objeto es: {contractObject}.'),
+        blank(),
+        para('Los descuentos de estampillas autorizados corresponden al Acta de cobro N° {actNumber} del periodo comprendido entre el {periodFrom} y el {periodTo}.'),
+        blank(),
+        blank(),
+        para('Atentamente,'),
+        blank(),
+        blank(),
+        para('___________________________________', { center: true }),
+        para('{contractorName}', { bold: true, center: true }),
+        para('C.C. N° {idNumber}', { center: true }),
+        para('Contratista', { center: true })
+    ];
+    writeDocx('FORMATO DESCUENTO DE ESTAMPILLAS.docx', buildDoc(ps));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n🔨 Generando plantillas Word con etiquetas docxtemplater...\n');
 createInformeActividades();
 createRetencionFuente();
+createDescuentoEstampillas();
 console.log('\n✅ Listo. Plantillas guardadas en:', TEMPLATES_DIR);

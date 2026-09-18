@@ -21,9 +21,11 @@ services:
       - MONGODB_URI=mongodb://mongodb:27017/formatos_cuentas
       - JWT_SECRET=${JWT_SECRET:-supersecretkey_change_me_in_production}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     volumes:
       - backend_uploads:/app/uploads
       - backend_generated:/app/generated
+      - backend_templates:/app/templates
     depends_on:
       - mongodb
     restart: unless-stopped
@@ -42,3 +44,4 @@ volumes:
   mongodb_data:
   backend_uploads:
   backend_generated:
+  backend_templates:

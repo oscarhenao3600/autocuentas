@@ -31,6 +31,38 @@ const contractSchema = new mongoose.Schema({
         type: String,
         default: ""
     },
+    supervisorDependency: {
+        type: String,
+        default: "Secretaría de Planeación"
+    },
+    contractorAddress: {
+        type: String,
+        default: ""
+    },
+    contractorPhone: {
+        type: String,
+        default: ""
+    },
+    idCity: {
+        type: String,
+        default: "Armenia"
+    },
+    contractorEmail: {
+        type: String,
+        default: ""
+    },
+    isTaxFiler: {
+        type: Boolean,
+        default: false
+    },
+    takesCosts: {
+        type: Boolean,
+        default: false
+    },
+    takesExemptRent: {
+        type: Boolean,
+        default: true
+    },
     cutoffDay: {
         type: Number,
         default: 25

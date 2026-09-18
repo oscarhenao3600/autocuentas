@@ -51,6 +51,9 @@ exports.extractContractData = async (filePath) => {
             - paymentMethod (Forma de pago, ej: Transferencia electrónica, consignación)
             - contractObject (Objeto del contrato, descripción general de las actividades o servicios prestados)
             - supervisorName (Nombre del supervisor asignado al contrato, suele aparecer al final o en las cláusulas de supervisión)
+            - supervisorDependency (Dependencia, cargo, secretaría o área a la que pertenece el supervisor o que supervisa el contrato, ej: Secretaría de Planeación. Si no se especifica, intenta deducirlo o déjalo vacío "")
+            - contractorAddress (Dirección de domicilio, residencia o notificación del contratista, ej: Calle 15 No 14-22. Búscala en la sección de datos o firmas del contratista. Si no se especifica, déjala vacía "")
+            - contractorPhone (Número de teléfono o celular del contratista. Búscalo en los datos de notificación o firmas. Si no se especifica, déjalo vacío "")
             - cutoffDay (Día numérico del mes en que se hace la fecha de corte, ej. 25 o 15. Si no se especifica explícitamente, pon 25 como valor numérico por defecto)
             - activities (Un arreglo de strings con cada una de las obligaciones específicas o actividades detalladas a desarrollar del contratista que aparezcan en las cláusulas de obligaciones. Deben ser frases descriptivas limpias sin numeración al inicio, ej: "Apoyar la implementación del sistema..." en lugar de "1. Apoyar la implementación del sistema...")
         `;
@@ -195,6 +198,129 @@ exports.extractAdditionContractData = async (filePath) => {
     } catch (error) {
         console.error("Error en extractAdditionContractData:", error);
         throw new Error("No se pudo procesar la adición con IA");
+    }
+};
+
+exports.extractBankCertificateData = async (filePath) => {
+    try {
+        const dataBuffer = fs.readFileSync(filePath);
+        let text = "";
+        let useMultimodal = false;
+
+        if (filePath.endsWith('.pdf')) {
+            try {
+                const data = await pdf(dataBuffer);
+                text = data.text;
+                if (!text || text.trim().length < 50) {
+                    useMultimodal = true;
+                }
+            } catch (err) {
+                console.warn("pdf-parse falló en certificado bancario, usando Gemini multimodal OCR:", err.message);
+                useMultimodal = true;
+            }
+        } else {
+            // It might be an image (jpg/png)
+            useMultimodal = true;
+        }
+
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+        const prompt = `
+            Analiza el siguiente documento que corresponde a una Certificación Bancaria o Certificado de Cuenta y extrae la información en formato JSON puro (sin markdown). 
+            Extrae SOLO los campos que encuentres. Si no encuentras un dato, déjalo como string vacío "".
+            
+            Campos requeridos:
+            - bankName (Nombre de la entidad bancaria en mayúsculas, ej: BANCOLOMBIA, DAVIVIENDA, BANCO DE BOGOTA, BANCO DE OCCIDENTE)
+            - accountNumber (Número de la cuenta bancaria, ej: 98765432109)
+            - paymentMethod (El tipo de cuenta en formato limpio, ej: "Ahorros" o "Corriente")
+        `;
+
+        let result;
+        const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
+        if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
+            console.log("Procesando certificado bancario escaneado o imagen. Usando modo multimodal de Gemini...");
+            const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
+            const filePart = {
+                inlineData: {
+                    data: dataBuffer.toString("base64"),
+                    mimeType: mimeType
+                }
+            };
+            result = await model.generateContent([prompt, filePart]);
+        } else {
+            result = await model.generateContent(`${prompt}\n\nTexto de la certificación bancaria:\n${text.substring(0, 10000)}`);
+        }
+
+        const response = await result.response;
+        const jsonText = response.text().replace(/```json|```/g, "").trim();
+        
+        return JSON.parse(jsonText);
+    } catch (error) {
+        console.error("Error en extractBankCertificateData:", error);
+        throw new Error("No se pudo procesar el certificado bancario con IA");
+    }
+};
+
+exports.extractSecuritySocialData = async (filePath) => {
+    try {
+        const dataBuffer = fs.readFileSync(filePath);
+        let text = "";
+        let useMultimodal = false;
+
+        if (filePath.endsWith('.pdf')) {
+            try {
+                const data = await pdf(dataBuffer);
+                text = data.text;
+                if (!text || text.trim().length < 150) {
+                    useMultimodal = true;
+                }
+            } catch (err) {
+                console.warn("pdf-parse falló en planilla SS, usando Gemini multimodal OCR:", err.message);
+                useMultimodal = true;
+            }
+        } else {
+            useMultimodal = true;
+        }
+
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+        const prompt = `
+            Analiza la siguiente planilla de pago de seguridad social (PILA) o aportes y extrae la información en formato JSON puro (sin markdown). 
+            Extrae SOLO los campos que encuentres. Si no encuentras un dato, déjalo como string vacío "" o 0 para campos numéricos.
+            
+            Campos requeridos:
+            - operator (El nombre del operador de la planilla, ej: SIMPLE, SOI, miplanilla, aportesenlinea, en mayúsculas)
+            - planillaNumber (Número de planilla de aportes, suele ser un número largo de 9 o 10 dígitos)
+            - totalPaid (Número entero. El valor total pagado en la planilla, ej: 585200)
+            - saludPaid (Número entero. El valor pagado al subsistema de salud, ej: 180000)
+            - pensionPaid (Número entero. El valor pagado al subsistema de pensiones, ej: 240000)
+            - arlPaid (Número entero. El valor pagado a riesgos laborales ARL, ej: 25200)
+            - period (Periodo de cotización de los aportes en texto legible, ej: "Mayo de 2026", "Abril de 2026")
+        `;
+
+        let result;
+        const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
+        if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
+            console.log("Procesando planilla de seguridad social escaneada o imagen. Usando modo multimodal de Gemini...");
+            const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
+            const filePart = {
+                inlineData: {
+                    data: dataBuffer.toString("base64"),
+                    mimeType: mimeType
+                }
+            };
+            result = await model.generateContent([prompt, filePart]);
+        } else {
+            result = await model.generateContent(`${prompt}\n\nTexto de la planilla:\n${text.substring(0, 30000)}`);
+        }
+
+        const response = await result.response;
+        const jsonText = response.text().replace(/```json|```/g, "").trim();
+        
+        return JSON.parse(jsonText);
+    } catch (error) {
+        console.error("Error en extractSecuritySocialData:", error);
+        throw new Error("No se pudo procesar la planilla de seguridad social con IA");
     }
 };
 

@@ -5,6 +5,7 @@ const Contract        = require('../models/Contract');
 const User            = require('../models/User');
 const { generateDocument } = require('../services/document.service');
 const { createBillingZip } = require('../services/archive.service');
+const { extractSecuritySocialData } = require('../services/gemini.service');
 
 // ──────────────────────────────────────────────────────────────
 // Helper: Calculate IBC (Ingreso Base de Cotización)
@@ -26,12 +27,23 @@ const MONTHS_ES = [
     'enero','febrero','marzo','abril','mayo','junio',
     'julio','agosto','septiembre','octubre','noviembre','diciembre'
 ];
-function formatDateEs(date) {
-    const d = new Date(date);
+function parseDateSafe(dateInput) {
+    if (!dateInput) return null;
+    if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+        const [y, m, d] = dateInput.split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
+    const d = new Date(dateInput);
+    return isNaN(d.getTime()) ? null : d;
+}
+
+function formatDateEs(dateInput) {
+    const d = parseDateSafe(dateInput);
+    if (!d) return '';
     return `${d.getDate()} de ${MONTHS_ES[d.getMonth()]} de ${d.getFullYear()}`;
 }
-function monthYearEs(date) {
-    const d = new Date(date);
+function monthYearEs(dateInput) {
+    const d = parseDateSafe(dateInput) || new Date();
     return { mes: MONTHS_ES[d.getMonth()].toUpperCase(), anio: d.getFullYear().toString() };
 }
 
@@ -168,33 +180,180 @@ exports.generatePackage = async (req, res) => {
 
         // ── Build common data object for all 4 templates ─────────
         const { mes, anio } = monthYearEs(period.periodTo);
+
+        // Calculate remaining balance (including addition value if applicable)
+        const usedValue = period.actNumber * (parseFloat(contract.monthlyValue) || 0);
+        const remainingVal = Math.max(0, combinedTotalVal - usedValue);
+
+        // Map act number to Spanish text representation
+        const ACT_TEXTS = {
+            1: "PRIMER PAGO",
+            2: "SEGUNDO PAGO",
+            3: "TERCER PAGO",
+            4: "CUARTO PAGO",
+            5: "QUINTO PAGO",
+            6: "SEXTO PAGO",
+            7: "SEPTIMO PAGO",
+            8: "OCTAVO PAGO",
+            9: "NOVENO PAGO",
+            10: "DECIMO PAGO"
+        };
+
+        // Determine Month and Year in Spanish capitalised for stamps (e.g. "Abril 2026")
+        const mesEsCapitalized = mes.charAt(0) + mes.slice(1).toLowerCase();
+        const periodMonthYear = `${mesEsCapitalized} ${anio}`;
+
+        // Determine contract type checkboxes for stamps and other formats
+        const contractTypeClean = (contract.contractType || '').toLowerCase();
+        const isApoyo = contractTypeClean.includes('apoyo') || contractTypeClean.includes('gesti');
+        const isProfesional = contractTypeClean.includes('profesional') || (!isApoyo && contractTypeClean.includes('servicios'));
+        const isObra = contractTypeClean.includes('obra');
+        const isConsultoria = contractTypeClean.includes('consultor');
+        const isCompraventa = contractTypeClean.includes('compra') || contractTypeClean.includes('suministro');
+        const isProveedor = contractTypeClean.includes('proveedor');
+        const isOtro = !isApoyo && !isProfesional && !isObra && !isConsultoria && !isCompraventa && !isProveedor;
+
+        // Checkboxes characters
+        const chkApoyo = isApoyo ? "[ X ]" : "[   ]";
+        const chkProfesional = isProfesional ? "[ X ]" : "[   ]";
+        const chkObra = isObra ? "[ X ]" : "[   ]";
+        const chkConsultoria = isConsultoria ? "[ X ]" : "[   ]";
+        const chkSuministros = isCompraventa ? "[ X ]" : "[   ]";
+        const chkProveedor = isProveedor ? "[ X ]" : "[   ]";
+        const chkOtro = isOtro ? "[ X ]" : "[   ]";
+
+        // Forma de pago formatted description
+        const formaPagoText = contract.paymentMethod
+            ? (contract.paymentMethod.toLowerCase().includes('cuenta')
+                ? `${contract.paymentMethod} No. ${contract.accountNumber || ''}`
+                : `Transferencia Cuenta ${contract.paymentMethod} No. ${contract.accountNumber || ''}`)
+            : (contract.accountNumber ? `Transferencia Cuenta No. ${contract.accountNumber}` : 'Transferencia Electrónica');
+
+        // Formatted currency strings
+        const totalValFormatted = Number(contract.totalValue || 0).toLocaleString('es-CO');
+        const monthlyValFormatted = Number(contract.monthlyValue || 0).toLocaleString('es-CO');
+        const remainingValFormatted = remainingVal.toLocaleString('es-CO');
+        const saludValFormatted = Number(period.securitySocial?.saludPaid || 0).toLocaleString('es-CO');
+        const pensionValFormatted = Number(period.securitySocial?.pensionPaid || 0).toLocaleString('es-CO');
+        const arlValFormatted = Number(period.securitySocial?.arlPaid || 0).toLocaleString('es-CO');
+        const ssTotalFormatted = Number(period.securitySocial?.totalPaid || 0).toLocaleString('es-CO');
+
+        // Tax / Retención options
+        const takesCosts = !!contract.takesCosts;
+        const takesExemptRent = contract.takesExemptRent !== false;
+        const isTaxFiler = !!contract.isTaxFiler;
+        const previousTaxYear = (parseInt(anio, 10) - 1).toString();
+
         const commonData = {
-            // Contractor info
-            contractorName:   contract.contractorName    || '',
+            // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
+            fecha_certificado:                 formatDateEs(period.periodTo),
+            nombre_supervisor:                 contract.supervisorName || '',
+            dependencia:                       contract.supervisorDependency || 'Secretaría de Planeación',
+            nombre_contratista:                contract.contractorName || user.fullName || '',
+            identificacion_contratista:        contract.idNumber || '',
+            tipo_contrato:                     contract.contractType || 'Prestación de Servicios Profesionales',
+            numero_contrato:                   contract.contractNumber || '',
+            fecha_acta_inicio:                 contract.startDate ? formatDateEs(contract.startDate) : '',
+            fecha_terminacion:                 contract.endDate ? formatDateEs(contract.endDate) : '',
+            cdp:                               contract.cdp || '',
+            rp:                                contract.rp || '',
+            rubro_presupuestal:                contract.rubro || '',
+            valor_total:                       totalValFormatted,
+            entidad_bancaria:                  contract.bankName || '',
+            valor_autorizado_pago:             monthlyValFormatted,
+            numero_cuenta:                     contract.accountNumber || '',
+            saldo_restante:                    remainingValFormatted,
+            forma_pago:                        formaPagoText,
+            periodo_pagar_inicio:              formatDateEs(period.periodFrom),
+            periodo_pagar_fin:                 formatDateEs(period.periodTo),
+            mes_planilla:                      period.securitySocial?.period || mes,
+            numero_planilla:                   period.securitySocial?.planillaNumber || '',
+            valor_pension:                     pensionValFormatted,
+            valor_salud:                       saludValFormatted,
+            valor_arl:                         arlValFormatted,
+            valor_pago_certificado:            monthlyValFormatted,
+            soporte_acta_inicio_folios:        period.actNumber === 1 ? "1" : "0",
+            soporte_informe_contratista_folios: "2",
+            soporte_informe_supervisor_folios:  "1",
+            soportes_otros:                    "Planilla de Seguridad Social, RUT, Certificación Bancaria",
+            chk_anticipo:                      "[   ]",
+            chk_primero:                       period.actNumber === 1 ? "[ X ]" : "[   ]",
+            chk_segundo:                       period.actNumber === 2 ? "[ X ]" : "[   ]",
+            chk_tercero:                       period.actNumber === 3 ? "[ X ]" : "[   ]",
+            chk_cuarto:                        period.actNumber === 4 ? "[ X ]" : "[   ]",
+            chk_quinto:                        period.actNumber === 5 ? "[ X ]" : "[   ]",
+            chk_sexto:                         period.actNumber === 6 ? "[ X ]" : "[   ]",
+            chk_septimo:                       period.actNumber === 7 ? "[ X ]" : "[   ]",
+            chk_octavo:                        period.actNumber === 8 ? "[ X ]" : "[   ]",
+            chk_noveno:                        period.actNumber === 9 ? "[ X ]" : "[   ]",
+            chk_otros:                         period.actNumber > 9 ? "[ X ]" : "[   ]",
+            otros_cual:                        period.actNumber > 9 ? (ACT_TEXTS[period.actNumber] || `PAGO ${period.actNumber}`) : "",
+
+            // ── NUEVAS VARIABLES (snake_case) para DESCUENTO DE ESTAMPILLAS ──
+            ciudad_fecha:                      `Armenia, ${formatDateEs(period.periodTo)}`,
+            direccion_contratista:             contract.contractorAddress || '',
+            telefono_contratista:              contract.contractorPhone || '',
+            chk_estampilla_pro_desarrollo:     "[ X ]",
+            chk_estampilla_pro_hospital:       "[ X ]",
+            chk_estampilla_pro_cultura:        "[ X ]",
+            chk_estampilla_pro_bienestar:      "[ X ]",
+            chk_contrato_apoyo_gestion:        chkApoyo,
+            chk_contrato_prof_servicios:       chkProfesional,
+            chk_contrato_obra:                 chkObra,
+            chk_contrato_consultoria:          chkConsultoria,
+            chk_contrato_compraventa:          chkSuministros,
+            chk_contrato_proveedor:            chkProveedor,
+            chk_contrato_otro:                 chkOtro,
+            tipo_contrato_otro_cual:           isOtro ? (contract.contractType || '') : '',
+            firma_contratista:                 contract.contractorName || user.fullName || '',
+            lugar_expedicion_cc:               contract.idCity || 'Armenia',
+
+            // ── NUEVAS VARIABLES (snake_case) para RETENCION EN LA FUENTE ──
+            mes_documento:                     mes.toLowerCase(),
+            anio_documento:                    anio,
+            valor_a_pagar_acta_actual:         monthlyValFormatted,
+            chk_costos_deducciones_no:         takesCosts ? "[   ]" : "[ X ]",
+            chk_costos_deducciones_si:         takesCosts ? "[ X ]" : "[   ]",
+            chk_renta_exenta_si:               takesExemptRent ? "[ X ]" : "[   ]",
+            chk_renta_exenta_no:               takesExemptRent ? "[   ]" : "[ X ]",
+            anio_vigencia_anterior:            previousTaxYear,
+            chk_declarante_renta_si:           isTaxFiler ? "[ X ]" : "[   ]",
+            chk_declarante_renta_no:           isTaxFiler ? "[   ]" : "[ X ]",
+            correo_contratista:                contract.contractorEmail || user.email || '',
+
+            // ── VARIABLES LEGACY (camelCase) para compatibilidad con INFORME DE ACTIVIDADES ──
+            contractorName:   contract.contractorName    || user.fullName || '',
             idNumber:         contract.idNumber           || '',
             contractNumber:   contract.contractNumber     || '',
             contractType:     contract.contractType       || '',
             contractObject:   contract.contractObject     || '',
             supervisorName:   contract.supervisorName     || '',
-            startDate:        contract.startDate          || '',
-            endDate:          contract.endDate            || '',
-            // Financial
-            totalValue:       Number(contract.totalValue  || 0).toLocaleString('es-CO'),
+            supervisorDependency: contract.supervisorDependency || 'Secretaría de Planeación',
+            contractorAddress: contract.contractorAddress || '',
+            contractorPhone:   contract.contractorPhone   || '',
+            startDate:        contract.startDate ? formatDateEs(contract.startDate) : '',
+            endDate:          contract.endDate ? formatDateEs(contract.endDate) : '',
+            periodMonthYear,
+            chkApoyo,
+            chkProfesional,
+            chkObra,
+            chkConsultoria,
+            chkSuministros,
+            chkProveedor,
+            chkOtro,
+            totalValue:       totalValFormatted,
             totalValueWord:   contract.totalValueWord     || '',
-            monthlyValue:     Number(contract.monthlyValue|| 0).toLocaleString('es-CO'),
+            monthlyValue:     monthlyValFormatted,
             monthlyValueWord: contract.monthlyValueWord   || '',
             ibcValue:         ibc.toLocaleString('es-CO'),
-            // Document identifiers
             rpNumber:         contract.rp                 || '',
             cdpNumber:        contract.cdp                || '',
             rubro:            contract.rubro              || '',
             actNumber:        period.actNumber.toString(),
-            // Period
             periodFrom:       formatDateEs(period.periodFrom),
             periodTo:         formatDateEs(period.periodTo),
             mes,
             anio,
-            // Addition details
             hasAddition:       periodIsAddition,
             additionValue:     rawAddVal.toLocaleString('es-CO'),
             additionValueWord: contract.additionValueWord || '',
@@ -206,14 +365,22 @@ exports.generatePackage = async (req, res) => {
             additionDuration:  contract.additionDuration || '',
             totalValueWithAddition: combinedTotalVal.toLocaleString('es-CO'),
             totalValueWithAdditionWord: combinedValWord,
-            // Security Social
             ssOperator:       period.securitySocial?.operator      || '',
             ssPlanilla:       period.securitySocial?.planillaNumber || '',
-            ssTotalPaid:      Number(period.securitySocial?.totalPaid   || 0).toLocaleString('es-CO'),
-            ssSalud:          Number(period.securitySocial?.saludPaid   || 0).toLocaleString('es-CO'),
-            ssPension:        Number(period.securitySocial?.pensionPaid || 0).toLocaleString('es-CO'),
-            ssArl:            Number(period.securitySocial?.arlPaid     || 0).toLocaleString('es-CO'),
+            ssTotalPaid:      ssTotalFormatted,
+            ssSalud:          saludValFormatted,
+            ssPension:        pensionValFormatted,
+            ssArl:            arlValFormatted,
             ssPeriod:         period.securitySocial?.period || mes,
+            bankName:         contract.bankName          || '',
+            accountNumber:    contract.accountNumber     || '',
+            paymentMethod:    contract.paymentMethod     || '',
+            periodToDate:     formatDateEs(period.periodTo),
+            remainingValue:   remainingValFormatted,
+            foliosContratista: "2",
+            foliosSupervisor:  "1",
+            actNumberText:     ACT_TEXTS[period.actNumber] || `${period.actNumber} PAGO`,
+
             // Activities array (for loops in templates)
             activities: (period.activities || []).map((act, i) => ({
                 num:             (i + 1).toString(),
@@ -297,5 +464,28 @@ exports.getTelegramCode = async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ message: 'Error al generar el código', error: err.message });
+    }
+};
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/billing/upload-planilla  →  Process Planilla social PDF with Gemini
+// ──────────────────────────────────────────────────────────────
+exports.uploadPlanillaSocial = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Por favor suba la planilla de seguridad social' });
+        }
+
+        console.log("Procesando planilla de seguridad social con IA...");
+        const extracted = await extractSecuritySocialData(req.file.path);
+        console.log("Datos de planilla extraídos:", extracted);
+
+        res.json({
+            message: 'Planilla procesada con éxito por la IA',
+            data: extracted
+        });
+    } catch (error) {
+        console.error('Error uploadPlanillaSocial:', error);
+        res.status(500).json({ message: 'Error al procesar la planilla de seguridad social', error: error.message });
     }
 };

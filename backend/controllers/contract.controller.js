@@ -1,5 +1,5 @@
 const Contract = require('../models/Contract');
-const { extractContractData, extractRpData } = require('../services/gemini.service');
+const { extractContractData, extractRpData, extractBankCertificateData } = require('../services/gemini.service');
 
 exports.uploadBaseContract = async (req, res) => {
     try {
@@ -51,15 +51,34 @@ exports.uploadAttachments = async (req, res) => {
         }
 
         const updates = {};
+        let bankExtracted = null;
+
         if (req.files.rut) updates.rutPath = req.files.rut[0].path;
-        if (req.files.bankCertificate) updates.bankCertificatePath = req.files.bankCertificate[0].path;
+        if (req.files.bankCertificate) {
+            const file = req.files.bankCertificate[0];
+            updates.bankCertificatePath = file.path;
+            try {
+                console.log("Procesando Certificado Bancario con IA...");
+                bankExtracted = await extractBankCertificateData(file.path);
+                if (bankExtracted) {
+                    if (bankExtracted.bankName) updates.bankName = bankExtracted.bankName;
+                    if (bankExtracted.accountNumber) updates.accountNumber = bankExtracted.accountNumber;
+                    if (bankExtracted.paymentMethod) updates.paymentMethod = bankExtracted.paymentMethod;
+                    console.log("Datos bancarios extraídos:", bankExtracted);
+                }
+            } catch (err) {
+                console.error("No se pudo extraer información del certificado bancario:", err.message);
+            }
+        }
         if (req.files.securitySocial) updates.securitySocialPath = req.files.securitySocial[0].path;
 
         Object.assign(contract, updates);
         await contract.save();
 
         res.json({
-            message: 'Anexos actualizados con éxito',
+            message: bankExtracted 
+                ? 'Anexos actualizados y certificado bancario procesado por la IA con éxito' 
+                : 'Anexos actualizados con éxito',
             data: contract
         });
     } catch (error) {
@@ -78,7 +97,9 @@ exports.updateContract = async (req, res) => {
             'contractorName', 'idNumber', 'contractType', 'contractNumber',
             'startDate', 'endDate', 'cdp', 'rp', 'rubro', 'totalValue',
             'paymentValue', 'bankName', 'accountNumber', 'paymentMethod',
-            'monthlyValue', 'contractObject', 'activities',
+            'monthlyValue', 'contractObject', 'activities', 'supervisorName', 'supervisorDependency',
+            'contractorAddress', 'contractorPhone',
+            'idCity', 'contractorEmail', 'isTaxFiler', 'takesCosts', 'takesExemptRent',
             'periodType', 'initialDurationMonths', 'additionDurationMonths', 'hasAddition',
             'additionValue', 'additionValueWord', 'additionStartDate', 'additionEndDate',
             'additionCdp', 'additionRp', 'additionRubro', 'additionDuration'

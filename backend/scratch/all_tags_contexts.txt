@@ -1,0 +1,97 @@
+=== SCANNING FOR ALL CURLY BRACES IN XML ===
+
+Position 8085 to 8098:
+ts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{periodToDate}                                       {supervisorName}                   Secretaría de Planeación<
+--------------------------------------------------------------------------------
+
+Position 8138 to 8153:
+z w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{periodToDate}                                       {supervisorName}                   Secretaría de Planeación</w:t></w:r></w:p></w:tc></w:tr><w:tr w:rsidR="0065609B"
+--------------------------------------------------------------------------------
+
+Position 12040 to 12597:
+bCs/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/><w:lang w:val="es-ES"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="00784F3B" w:rsidRPr="00784F3B"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b w:val="0"/><w:bCs/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/><w:lang w:val="es-ES"/></w:rPr><w:t>contractorName</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="00784F3B" w:rsidRPr="00784F3B"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b w:val="0"/><w:bCs/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/><w:lang w:val="es-ES"/></w:rPr><w:t>}</w:t></w:r></w:p><w:p w14:paraId="156F02FF" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 13977 to 14530:
+<w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/><w:lang w:eastAsia="es-CO"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="00784F3B" w:rsidRPr="00784F3B"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:bCs/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/><w:lang w:eastAsia="es-CO"/></w:rPr><w:t>idNumber</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="00784F3B" w:rsidRPr="00784F3B"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:bCs/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/><w:lang w:eastAsia="es-CO"/></w:rPr><w:t>}</w:t></w:r></w:p><w:p w14:paraId="517043E6" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 15758 to 16223:
+nsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:val="es-CO"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="000A6C97" w:rsidRPr="000A6C97"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:val="es-CO"/></w:rPr><w:t>contractType</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="000A6C97" w:rsidRPr="000A6C97"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:val="es-CO"/></w:rPr><w:t>}</w:t></w:r></w:p><w:p w14:paraId="47370FB1" w14:textId="267E4DF1" w:rsidR="00784F3B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 18016 to 18521:
+rial"/><w:b/><w:bCs/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:eastAsia="es-CO"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="00784F3B" w:rsidRPr="00784F3B"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:bCs/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:eastAsia="es-CO"/></w:rPr><w:t>contractNumber</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="00784F3B" w:rsidRPr="00784F3B"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:bCs/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:eastAsia="es-CO"/></w:rPr><w:t>}</w:t></w:r></w:p><w:p w14:paraId="4F4A4F3F" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 20029 to 20519:
+hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:proofErr w:type="gramStart"/><w:r w:rsidR="005B2DCD" w:rsidRPr="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>startDate</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">}  </w:t></w:r><w:r w:rsidRPr="009C1BFE"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Aria
+--------------------------------------------------------------------------------
+
+Position 21390 to 21783:
+ts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="005B2DCD" w:rsidRPr="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>endDate</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>}</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="
+--------------------------------------------------------------------------------
+
+Position 23214 to 23594:
+scii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>cdp</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>}</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="
+--------------------------------------------------------------------------------
+
+Position 24967 to 25388:
+"Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>rp</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="005B2DCD"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>}</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><
+--------------------------------------------------------------------------------
+
+Position 26238 to 26244:
+ts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{rubro}</w:t></w:r><w:r w:rsidRPr="009C1BFE"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"
+--------------------------------------------------------------------------------
+
+Position 27070 to 27498:
+ts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:proofErr w:type="gramStart"/><w:r w:rsidR="004C54D4" w:rsidRPr="004C54D4"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>totalValue</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="004C54D4"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>}</w:t></w:r><w:r w:rsidRPr="009C1BFE"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"
+--------------------------------------------------------------------------------
+
+Position 28394 to 28846:
+"Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="004C54D4" w:rsidRPr="004C54D4"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>paymentValue</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="004C54D4"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>}</w:t></w:r></w:p><w:p w14:paraId="013A2A67" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 29519 to 29520:
+scii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{}</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="
+--------------------------------------------------------------------------------
+
+Position 30228 to 30669:
+hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="007F61D0" w:rsidRPr="007F61D0"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>accountNumber</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="007F61D0"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>}</w:t></w:r></w:p><w:p w14:paraId="5F00D849" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 31782 to 32235:
+"Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>{</w:t></w:r><w:proofErr w:type="spellStart"/><w:r w:rsidR="007F61D0" w:rsidRPr="007F61D0"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>paymentMethod</w:t></w:r><w:proofErr w:type="spellEnd"/><w:r w:rsidR="007F61D0"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:u w:val="single"/></w:rPr><w:t>}</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="
+--------------------------------------------------------------------------------
+
+Position 33243 to 33257:
+hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>Transferencia Cuenta {paymentMethod} N. {accountNumber}</w:t></w:r></w:p><w:p w14:paraId="5C8FE5F4" w14:textId="77777777" w:rsidR="0065
+--------------------------------------------------------------------------------
+
+Position 33262 to 33276:
+"Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>Transferencia Cuenta {paymentMethod} N. {accountNumber}</w:t></w:r></w:p><w:p w14:paraId="5C8FE5F4" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 34358 to 34369:
+:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>Del {periodFrom} al {periodTo}</w:t></w:r></w:p></w:tc></w:tr><w:tr w:rsidR="0065609B" w14:paraId="21E1A6ED" w14:te
+--------------------------------------------------------------------------------
+
+Position 34374 to 34383:
+:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>Del {periodFrom} al {periodTo}</w:t></w:r></w:p></w:tc></w:tr><w:tr w:rsidR="0065609B" w14:paraId="21E1A6ED" w14:textId="77777777
+--------------------------------------------------------------------------------
+
+Position 37096 to 37106:
+al"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:val="es-CO" w:eastAsia="es-CO"/></w:rPr><w:t>$ {ssPension}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="5400" w:type="dxa"/><w:gridSpan w:val="2"/><w:vM
+--------------------------------------------------------------------------------
+
+Position 38616 to 38634:
+"18"/><w:lang w:val="es-ES"/></w:rPr><w:t xml:space="preserve">Informe del contratista: # de folios {foliosContratista} </w:t></w:r></w:p><w:p w14:paraId="07CAFC77" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefau
+--------------------------------------------------------------------------------
+
+Position 39170 to 39187:
+w:b w:val="0"/><w:szCs w:val="18"/></w:rPr><w:t>Informe del supervisor y/o interventor: # de folios {foliosSupervisor}</w:t></w:r></w:p><w:p w14:paraId="11442305" w14:textId="77777777" w:rsidR="0065609B" w:rsidRDefaul
+--------------------------------------------------------------------------------
+
+Position 40798 to 40806:
+al"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:val="es-CO" w:eastAsia="es-CO"/></w:rPr><w:t>$ {ssSalud}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="5400" w:type="dxa"/><w:gridSpan w:val="2"/><w:vM
+--------------------------------------------------------------------------------

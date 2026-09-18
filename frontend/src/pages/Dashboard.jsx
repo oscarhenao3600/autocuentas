@@ -3,7 +3,7 @@ import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import {
-    LogOut, User, Settings, FileText, Upload, AlertCircle,
+    LogOut, User, Users, Settings, FileText, Upload, AlertCircle,
     ChevronRight, Calendar, MessageCircle, Package, Download
 } from 'lucide-react';
 import BillingForm from '../components/BillingForm';
@@ -147,6 +147,12 @@ const Dashboard = () => {
                         {/* ── Admin cards ─────────────────────────────────── */}
                         {user.role === 'admin' && (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
+                                <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
+                                    <Users size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
+                                    <h3 style={{ marginBottom: '0.5rem' }}>Directorio de Contratistas</h3>
+                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Consulta los usuarios inscritos identificados por su número de cédula.</p>
+                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/users')}>Ver Funcionarios</button>
+                                </div>
                                 <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
                                     <Settings size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
                                     <h3 style={{ marginBottom: '0.5rem' }}>Configurar Formatos</h3>

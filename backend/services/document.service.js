@@ -8,9 +8,14 @@ exports.generateDocument = async (templateName, data) => {
         const templatePath = path.resolve(__dirname, "..", "templates", templateName);
         const content = fs.readFileSync(templatePath, "binary");
         const zip = new PizZip(content);
+        const docXml = zip.file("word/document.xml");
+        const xmlText = docXml ? docXml.asText() : "";
+        const hasDoubleBraces = /\{\{[^{}]+\}\}/.test(xmlText);
+
         const doc = new Docxtemplater(zip, {
             paragraphLoop: true,
             linebreaks: true,
+            delimiters: hasDoubleBraces ? { start: "{{", end: "}}" } : { start: "{", end: "}" },
         });
 
         // Fill the template with data

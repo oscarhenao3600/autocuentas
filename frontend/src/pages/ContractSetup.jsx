@@ -10,9 +10,10 @@ const ContractSetup = () => {
     const [extracting, setExtracting] = useState(false);
     const [uploadingAdd, setUploadingAdd] = useState(false);
     const [uploadingAddRp, setUploadingAddRp] = useState(false);
-    const [contract, setContract] = useState(null);
+        const [contract, setContract] = useState(null);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
+    const [extractingBank, setExtractingBank] = useState(false);
 
     useEffect(() => {
         fetchContract();
@@ -114,22 +115,36 @@ const ContractSetup = () => {
         }
     };
 
-    const handleAttachmentUpload = async (e, type) => {
+        const handleAttachmentUpload = async (e, type) => {
         const file = e.target.files[0];
         if (!file) return;
 
         const formData = new FormData();
         formData.append(type, file);
 
+        if (type === 'bankCertificate') {
+            setExtractingBank(true);
+        }
+        setError('');
+        setSuccess('');
+
         try {
             const { data } = await api.post('/contracts/upload-attachments', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
             setContract(data.data);
-            setSuccess('Anexo subido correctamente.');
-            setTimeout(() => setSuccess(''), 3000);
+            if (type === 'bankCertificate') {
+                setSuccess('Certificación Bancaria subida y procesada por IA con éxito. Banco, Cuenta y Tipo de Cuenta autocompletados.');
+            } else {
+                setSuccess('Anexo subido correctamente.');
+            }
+            setTimeout(() => setSuccess(''), 5000);
         } catch (err) {
             setError('Error al subir anexo: ' + (err.response?.data?.message || err.message));
+        } finally {
+            if (type === 'bankCertificate') {
+                setExtractingBank(false);
+            }
         }
     };
 
@@ -205,15 +220,120 @@ const ContractSetup = () => {
                                     <input className="input" value={contract.idNumber || ''} onChange={(e) => setContract({...contract, idNumber: e.target.value})} />
                                 </div>
                                 <div className="form-group">
+                                    <label className="label">Clase o Tipo de Contrato</label>
+                                    <input className="input" value={contract.contractType || ''} onChange={(e) => setContract({...contract, contractType: e.target.value})} placeholder="Ej: Prestación de Servicios" />
+                                </div>
+                                <div className="form-group">
                                     <label className="label">Número de Contrato</label>
                                     <input className="input" value={contract.contractNumber || ''} onChange={(e) => setContract({...contract, contractNumber: e.target.value})} />
                                 </div>
                                 <div className="form-group">
-                                    <label className="label">Valor Mensual</label>
+                                    <label className="label">Fecha Inicio Contrato</label>
+                                    <input className="input" type="date" value={contract.startDate ? contract.startDate.split('T')[0] : ''} onChange={(e) => setContract({...contract, startDate: e.target.value})} />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Fecha Fin Contrato</label>
+                                    <input className="input" type="date" value={contract.endDate ? contract.endDate.split('T')[0] : ''} onChange={(e) => setContract({...contract, endDate: e.target.value})} />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Valor Mensual ($)</label>
                                     <input className="input" type="number" value={contract.monthlyValue || ''} onChange={(e) => setContract({...contract, monthlyValue: e.target.value})} />
                                 </div>
+                                <div className="form-group">
+                                    <label className="label">Valor Mensual en Letras</label>
+                                    <input className="input" value={contract.monthlyValueWord || ''} onChange={(e) => setContract({...contract, monthlyValueWord: e.target.value})} placeholder="Ej: CUATRO MILLONES DE PESOS M/CTE" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Valor Total del Contrato ($)</label>
+                                    <input className="input" type="number" value={contract.totalValue || ''} onChange={(e) => setContract({...contract, totalValue: e.target.value})} />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Valor Total en Letras</label>
+                                    <input className="input" value={contract.totalValueWord || ''} onChange={(e) => setContract({...contract, totalValueWord: e.target.value})} placeholder="Ej: DIECIOCHO MILLONES DE PESOS M/CTE" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">CDP del Contrato</label>
+                                    <input className="input" value={contract.cdp || ''} onChange={(e) => setContract({...contract, cdp: e.target.value})} />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">RP del Contrato</label>
+                                    <input className="input" value={contract.rp || ''} onChange={(e) => setContract({...contract, rp: e.target.value})} />
+                                </div>
+                                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <label className="label">Rubro Presupuestal</label>
+                                    <input className="input" value={contract.rubro || ''} onChange={(e) => setContract({...contract, rubro: e.target.value})} />
+                                </div>
+                                
+                                <div className="form-group">
+                                    <label className="label">Entidad Bancaria</label>
+                                    <input className="input" value={contract.bankName || ''} onChange={(e) => setContract({...contract, bankName: e.target.value})} placeholder="Ej: BANCOLOMBIA" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Número de Cuenta</label>
+                                    <input className="input" value={contract.accountNumber || ''} onChange={(e) => setContract({...contract, accountNumber: e.target.value})} />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Tipo de Cuenta (Método Pago)</label>
+                                    <input className="input" value={contract.paymentMethod || ''} onChange={(e) => setContract({...contract, paymentMethod: e.target.value})} placeholder="Ej: Ahorros / Corriente" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Dirección del Contratista</label>
+                                    <input className="input" value={contract.contractorAddress || ''} onChange={(e) => setContract({...contract, contractorAddress: e.target.value})} placeholder="Ej: Carrera 18 # 2-75" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Teléfono del Contratista</label>
+                                    <input className="input" value={contract.contractorPhone || ''} onChange={(e) => setContract({...contract, contractorPhone: e.target.value})} placeholder="Ej: 3113414361" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Ciudad Expedición Cédula</label>
+                                    <input className="input" value={contract.idCity || ''} onChange={(e) => setContract({...contract, idCity: e.target.value})} placeholder="Ej: Armenia" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Correo Electrónico para Cuentas</label>
+                                    <input className="input" value={contract.contractorEmail || ''} onChange={(e) => setContract({...contract, contractorEmail: e.target.value})} placeholder="Ej: contratista@correo.com" />
+                                </div>
+
+                                <div className="form-group">
+                                    <label className="label">Nombre del Supervisor</label>
+                                    <input className="input" value={contract.supervisorName || ''} onChange={(e) => setContract({...contract, supervisorName: e.target.value})} />
+                                </div>
+                                <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                                    <label className="label">Dependencia / Cargo del Supervisor</label>
+                                    <input className="input" value={contract.supervisorDependency || ''} onChange={(e) => setContract({...contract, supervisorDependency: e.target.value})} placeholder="Ej: Secretaría de Planeación" />
+                                </div>
                             </div>
-                            <div className="form-group" style={{ marginTop: '1rem' }}>
+                            <div style={{ marginTop: '1.25rem', padding: '1rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border)' }}>
+                                <h4 style={{ fontSize: '0.9rem', marginBottom: '0.75rem', color: 'var(--text-main)', fontWeight: '600' }}>
+                                    Opciones Tributarias (Formato Retención en la Fuente)
+                                </h4>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={contract.isTaxFiler || false} 
+                                            onChange={(e) => setContract({...contract, isTaxFiler: e.target.checked})} 
+                                        />
+                                        <span>¿Es declarante de impuesto sobre la renta?</span>
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={contract.takesCosts || false} 
+                                            onChange={(e) => setContract({...contract, takesCosts: e.target.checked})} 
+                                        />
+                                        <span>¿Tomará costos y deducciones asociadas?</span>
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={contract.takesExemptRent !== false} 
+                                            onChange={(e) => setContract({...contract, takesExemptRent: e.target.checked})} 
+                                        />
+                                        <span>¿Tomará deducción del 25% como renta exenta?</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="form-group" style={{ marginTop: '1.25rem' }}>
                                 <label className="label">Objeto del Contrato</label>
                                 <textarea className="input" rows="3" value={contract.contractObject || ''} onChange={(e) => setContract({...contract, contractObject: e.target.value})} />
                             </div>
@@ -403,9 +523,9 @@ const ContractSetup = () => {
                                 </div>
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                                     <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Certificado Bancario</p>
-                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
-                                        {contract.bankCertificatePath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
-                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'bankCertificate')} accept=".pdf,.jpg,.jpeg,.png" />
+                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: extractingBank ? 0.7 : 1 }}>
+                                        {extractingBank ? '⏳ Extrayendo...' : contract.bankCertificatePath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'bankCertificate')} accept=".pdf,.jpg,.jpeg,.png" disabled={extractingBank} />
                                     </label>
                                 </div>
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
