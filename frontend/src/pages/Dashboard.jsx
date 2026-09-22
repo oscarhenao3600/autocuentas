@@ -4,9 +4,10 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import {
     LogOut, User, Users, Settings, FileText, Upload, AlertCircle,
-    ChevronRight, Calendar, MessageCircle, Package, Download
+    ChevronRight, Calendar, MessageCircle, Package, Download, Clock
 } from 'lucide-react';
 import BillingForm from '../components/BillingForm';
+import { calculatePeriods } from '../utils/period.utils';
 
 // ── Helper: days until cutoff ─────────────────────────────────
 function daysUntilCutoff(cutoffDay) {
@@ -51,12 +52,17 @@ const Dashboard = () => {
 
     const [showForm, setShowForm]       = React.useState(false);
     const [contract, setContract]       = React.useState(null);
+    const [reminderStatus, setReminderStatus] = React.useState(null);
     const [telegramCode, setTelegramCode] = React.useState('');
     const [showTelegram, setShowTelegram] = React.useState(false);
 
     React.useEffect(() => {
         api.get('/contracts')
             .then(({ data }) => setContract(data))
+            .catch(() => {});
+
+        api.get('/contracts/reminder-status')
+            .then(({ data }) => setReminderStatus(data))
             .catch(() => {});
     }, []);
 
@@ -81,6 +87,34 @@ const Dashboard = () => {
     };
 
     const cutoffInfo = contract?.cutoffDay ? daysUntilCutoff(contract.cutoffDay) : null;
+
+    const activeCutoffInfo = React.useMemo(() => {
+        if (!contract || !contract.startDate) return null;
+        const periods = calculatePeriods(
+            contract.startDate,
+            contract.initialDurationMonths || 4,
+            contract.additionDurationMonths || 0,
+            contract.periodType || 'mes_cumplido',
+            contract.endDate
+        );
+        if (!periods || periods.length === 0) return null;
+
+        const now = new Date();
+        for (const p of periods) {
+            const periodEnd = new Date(p.to + 'T23:59:59');
+            const diffTime = periodEnd.getTime() - now.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            if (diffDays >= 0) {
+                return {
+                    actNumber: p.actNumber,
+                    days: diffDays,
+                    date: p.to,
+                    isAddition: p.isAddition
+                };
+            }
+        }
+        return null;
+    }, [contract]);
 
     // ──────────────────────────────────────────────────────────
     return (
@@ -171,6 +205,46 @@ const Dashboard = () => {
                         {/* ── Client cards ────────────────────────────────── */}
                         {user.role !== 'admin' && (
                             <>
+                                {/* Reminder Alert Banner: <= 5 days and 0 evidences */}
+                                {reminderStatus?.needsReminder && (
+                                    <div className="glass animate-fade-in" style={{
+                                        padding: '1.25rem 1.5rem',
+                                        borderRadius: 'var(--radius-lg)',
+                                        border: '2px solid var(--error)',
+                                        background: 'rgba(239, 68, 68, 0.08)',
+                                        marginBottom: '1.5rem',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        flexWrap: 'wrap',
+                                        gap: '1rem'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                            <div style={{ background: 'var(--error)', color: 'white', borderRadius: '50%', padding: '0.6rem', display: 'flex', flexShrink: 0 }}>
+                                                <Clock size={24} />
+                                            </div>
+                                            <div>
+                                                <h4 style={{ margin: 0, color: 'var(--error)', fontSize: '1rem', fontWeight: 700 }}>
+                                                    ¡Recordatorio de Entrega de Cuenta! (Acta N° {reminderStatus.actNumber})
+                                                </h4>
+                                                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: 'var(--text-main)', fontWeight: 500 }}>
+                                                    {reminderStatus.message}
+                                                </p>
+                                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                                    Periodo: {reminderStatus.period?.from} al {reminderStatus.period?.to} (Fecha de corte)
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            className="btn" 
+                                            style={{ background: 'var(--error)', color: 'white', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                            onClick={() => setShowForm(true)}
+                                        >
+                                            Cargar Evidencias Ahora <ChevronRight size={16} />
+                                        </button>
+                                    </div>
+                                )}
+
                                 {/* Alert: no contract */}
                                 {!contract && (
                                     <div className="glass animate-fade-in" style={{
@@ -194,13 +268,13 @@ const Dashboard = () => {
                                 )}
 
                                 {/* ── Stat row ── */}
-                                {contract && cutoffInfo && (
+                                {contract && (activeCutoffInfo || cutoffInfo) && (
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
                                         <StatCard
                                             icon={<Calendar size={28} />}
-                                            label={`Fecha de corte: ${cutoffInfo.date}`}
-                                            value={`${cutoffInfo.days} días`}
-                                            accent={cutoffInfo.days <= 5 ? 'var(--error)' : cutoffInfo.days <= 10 ? 'var(--accent)' : 'var(--success)'}
+                                            label={`Corte Acta N° ${activeCutoffInfo ? activeCutoffInfo.actNumber : ''}: ${activeCutoffInfo ? activeCutoffInfo.date : cutoffInfo?.date}`}
+                                            value={`${activeCutoffInfo ? activeCutoffInfo.days : cutoffInfo?.days} días`}
+                                            accent={(activeCutoffInfo ? activeCutoffInfo.days : cutoffInfo?.days) <= 5 ? 'var(--error)' : (activeCutoffInfo ? activeCutoffInfo.days : cutoffInfo?.days) <= 10 ? 'var(--accent)' : 'var(--success)'}
                                         />
                                         <StatCard
                                             icon={<Package size={28} />}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
+import { filterSpecificObligations } from '../utils/period.utils';
 import { motion } from 'framer-motion';
 import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -10,7 +11,9 @@ const ContractSetup = () => {
     const [extracting, setExtracting] = useState(false);
     const [uploadingAdd, setUploadingAdd] = useState(false);
     const [uploadingAddRp, setUploadingAddRp] = useState(false);
-        const [contract, setContract] = useState(null);
+    const [uploadingActa, setUploadingActa] = useState(false);
+    const [uploadingRp, setUploadingRp] = useState(false);
+    const [contract, setContract] = useState(null);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [extractingBank, setExtractingBank] = useState(false);
@@ -22,6 +25,9 @@ const ContractSetup = () => {
     const fetchContract = async () => {
         try {
             const { data } = await api.get('/contracts');
+            if (data && data.activities) {
+                data.activities = filterSpecificObligations(data.activities);
+            }
             setContract(data);
         } catch (err) {
             // No contract found yet, that's fine
@@ -97,6 +103,53 @@ const ContractSetup = () => {
             setUploadingAddRp(false);
         }
     };
+
+    const handleActaUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('actaInicioFile', file);
+
+        setUploadingActa(true);
+        setError('');
+        setSuccess('');
+        try {
+            const { data } = await api.post('/contracts/upload-acta-inicio', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            setContract(data.data);
+            setSuccess(`Acta de Inicio procesada con éxito por la IA. Fecha oficial de inicio: ${data.data.startDate || 'N/A'}`);
+        } catch (err) {
+            setError('Error al procesar el Acta de Inicio: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setUploadingActa(false);
+        }
+    };
+
+    const handleRpUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('rpFile', file);
+
+        setUploadingRp(true);
+        setError('');
+        setSuccess('');
+        try {
+            const { data } = await api.post('/contracts/upload-rp', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            setContract(data.data);
+            setSuccess('Registro Presupuestal (RP) procesado con éxito por la IA.');
+        } catch (err) {
+            setError('Error al procesar el RP: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setUploadingRp(false);
+        }
+    };
+
 
 
     const handleSave = async (e) => {
@@ -339,13 +392,13 @@ const ContractSetup = () => {
                             </div>
                             <div className="form-group" style={{ marginTop: '1.5rem' }}>
                                 <label className="label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span>Actividades / Obligaciones Específicas (Extraídas de la Minuta)</span>
+                                    <span>Obligaciones Específicas del Contratista (para evidencias e informe mensual)</span>
                                     <button 
                                         type="button" 
                                         className="btn btn-primary" 
                                         style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
                                         onClick={() => {
-                                            const newAct = prompt('Ingresa la nueva actividad o obligación específica:');
+                                            const newAct = prompt('Ingresa la nueva obligación específica:');
                                             if (newAct && newAct.trim()) {
                                                 setContract({
                                                     ...contract,
@@ -359,7 +412,7 @@ const ContractSetup = () => {
                                 </label>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
                                     {(!contract.activities || contract.activities.length === 0) ? (
-                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontStyle: 'italic' }}>No hay actividades registradas. Haz clic en "Agregar Actividad" para añadir una o vuelve a subir tu minuta.</p>
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontStyle: 'italic' }}>No hay obligaciones específicas registradas. Haz clic en "Agregar Actividad" para añadir una o vuelve a subir tu minuta.</p>
                                     ) : (
                                         contract.activities.map((act, index) => (
                                             <div key={index} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -371,7 +424,7 @@ const ContractSetup = () => {
                                                         updated[index] = e.target.value;
                                                         setContract({ ...contract, activities: updated });
                                                     }}
-                                                    placeholder={`Actividad ${index + 1}`}
+                                                    placeholder={`Obligación Específica ${index + 1}`}
                                                 />
                                                 <button 
                                                     type="button" 
@@ -399,14 +452,14 @@ const ContractSetup = () => {
                             </h3>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.5rem' }}>
                                 <div className="form-group">
-                                    <label className="label">Tipo de Periodo (Minuta)</label>
+                                    <label className="label">Tipo de Periodo (Forma de Pago)</label>
                                     <select 
                                         className="input" 
                                         value={contract.periodType || 'mes_cumplido'} 
                                         onChange={(e) => setContract({...contract, periodType: e.target.value})}
                                     >
-                                        <option value="mes_cumplido">Mes Cumplido (Fijo, ej: 15 al 14)</option>
-                                        <option value="30_dias">30 Días Calendario (Variable / Desplazado)</option>
+                                        <option value="mes_cumplido">Mes Cumplido (ej: 28 Agosto al 27 Septiembre)</option>
+                                        <option value="30_dias">30 Días Calendario (ej: 28 Agosto al 26 Septiembre)</option>
                                     </select>
                                 </div>
                                 <div className="form-group">
@@ -512,24 +565,65 @@ const ContractSetup = () => {
                         </div>
 
                         <div style={{ marginBottom: '2rem' }}>
-                            <h3 style={{ fontSize: '1rem', marginBottom: '1rem' }}>Otros Documentos Requeridos</h3>
+                            <h3 style={{ fontSize: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <FileText size={18} color="var(--primary)" />
+                                Documentos Contractuales y Anexos
+                            </h3>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                                {/* Acta de Inicio / SECOP II */}
+                                <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
+                                    <p style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.25rem' }}>Acta de Inicio / SECOP II</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                        {contract.startDate ? `Inicio: ${contract.startDate.split('T')[0]}` : 'Define fecha de inicio'}
+                                    </p>
+                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: uploadingActa ? 0.7 : 1 }}>
+                                        {uploadingActa ? '⏳ Procesando...' : contract.actaInicioPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                        <input type="file" style={{ display: 'none' }} onChange={handleActaUpload} accept=".pdf,.jpg,.jpeg,.png" disabled={uploadingActa} />
+                                    </label>
+                                </div>
+
+                                {/* Registro Presupuestal RP */}
+                                <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
+                                    <p style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.25rem' }}>Registro Presupuestal (RP)</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                        {contract.rp ? `RP No. ${contract.rp}` : 'Extrae RP, CDP y Rubro'}
+                                    </p>
+                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: uploadingRp ? 0.7 : 1 }}>
+                                        {uploadingRp ? '⏳ Procesando...' : contract.rpPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                        <input type="file" style={{ display: 'none' }} onChange={handleRpUpload} accept=".pdf" disabled={uploadingRp} />
+                                    </label>
+                                </div>
+
+                                {/* RUT Actualizado */}
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                                    <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>RUT Actualizado</p>
+                                    <p style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.25rem' }}>RUT Actualizado</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                        {contract.rutPath ? 'Cargado en sistema' : 'Datos fiscales y DIAN'}
+                                    </p>
                                     <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
                                         {contract.rutPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
                                         <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'rut')} accept=".pdf" />
                                     </label>
                                 </div>
+
+                                {/* Certificado Bancario */}
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                                    <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Certificado Bancario</p>
+                                    <p style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.25rem' }}>Certificado Bancario</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                        {contract.bankName ? `${contract.bankName} (${contract.accountNumber || ''})` : 'Cuenta y banco'}
+                                    </p>
                                     <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: extractingBank ? 0.7 : 1 }}>
                                         {extractingBank ? '⏳ Extrayendo...' : contract.bankCertificatePath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
                                         <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'bankCertificate')} accept=".pdf,.jpg,.jpeg,.png" disabled={extractingBank} />
                                     </label>
                                 </div>
+
+                                {/* Seguridad Social */}
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                                    <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Seguridad Social</p>
+                                    <p style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.25rem' }}>Seguridad Social</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                        {contract.securitySocialPath ? 'Cargado en sistema' : 'Planilla de aportes'}
+                                    </p>
                                     <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
                                         {contract.securitySocialPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
                                         <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'securitySocial')} accept=".pdf" />

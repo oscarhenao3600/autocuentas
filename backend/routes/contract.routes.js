@@ -1,9 +1,20 @@
 const express = require('express');
 const router = express.Router();
-const { uploadBaseContract, getContract, uploadAttachments, updateContract, uploadRp, uploadAdditionContract, uploadAdditionRp } = require('../controllers/contract.controller');
+const { 
+    uploadBaseContract, 
+    getContract, 
+    uploadAttachments, 
+    updateContract, 
+    uploadRp, 
+    uploadAdditionContract, 
+    uploadAdditionRp, 
+    uploadActaInicio,
+    getEvidenceReminderStatus
+} = require('../controllers/contract.controller');
 const { protect } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
 
+router.get('/reminder-status', protect, getEvidenceReminderStatus);
 router.post('/upload-base', protect, upload.single('contractFile'), uploadBaseContract);
 router.get('/', protect, getContract);
 router.put('/', protect, updateContract);
@@ -14,6 +25,9 @@ router.post('/upload-attachments', protect, upload.fields([
     { name: 'bankCertificate', maxCount: 1 },
     { name: 'securitySocial', maxCount: 1 }
 ]), uploadAttachments);
+
+// Upload and process Acta de Inicio with Gemini AI
+router.post('/upload-acta-inicio', protect, upload.single('actaInicioFile'), uploadActaInicio);
 
 // Upload and process Registro Presupuestal (RP) with Gemini AI
 router.post('/upload-rp', protect, upload.single('rpFile'), uploadRp);

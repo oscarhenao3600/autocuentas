@@ -5,7 +5,7 @@ const Contract        = require('../models/Contract');
 const User            = require('../models/User');
 const { generateDocument } = require('../services/document.service');
 const { createBillingZip } = require('../services/archive.service');
-const { extractSecuritySocialData } = require('../services/gemini.service');
+const { extractSecuritySocialData, improveEvidenceText } = require('../services/gemini.service');
 
 // ──────────────────────────────────────────────────────────────
 // Helper: Calculate IBC (Ingreso Base de Cotización)
@@ -489,3 +489,31 @@ exports.uploadPlanillaSocial = async (req, res) => {
         res.status(500).json({ message: 'Error al procesar la planilla de seguridad social', error: error.message });
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/billing/improve-evidence-text  →  Enrich evidence text with Gemini (30-50 words)
+// ──────────────────────────────────────────────────────────────
+exports.improveEvidenceText = async (req, res) => {
+    try {
+        const { rawText, obligationText } = req.body;
+        if (!rawText || !rawText.trim()) {
+            return res.status(400).json({ message: 'El texto base de la evidencia es requerido' });
+        }
+
+        const contractorName = req.user ? req.user.name : '';
+        const improved = await improveEvidenceText({
+            rawText,
+            obligationText,
+            contractorName
+        });
+
+        res.json({
+            originalText: rawText,
+            improvedText: improved
+        });
+    } catch (error) {
+        console.error('Error improveEvidenceText controller:', error);
+        res.status(500).json({ message: 'Error al mejorar el texto con IA', error: error.message });
+    }
+};
+

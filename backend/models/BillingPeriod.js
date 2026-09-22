@@ -22,7 +22,7 @@ const billingPeriodSchema = new mongoose.Schema({
     activities: [{
         obligationCode: {
             type: String,
-            required: true
+            default: ""
         },
         obligationText: {
             type: String,
@@ -30,7 +30,7 @@ const billingPeriodSchema = new mongoose.Schema({
         },
         comment: {
             type: String,
-            required: true
+            default: ""
         },
         evidences: [{
             filename: String,

@@ -80,4 +80,13 @@ app.listen(PORT, () => {
     } else {
         console.log('ℹ️ Telegram Bot service not active (TELEGRAM_BOT_TOKEN missing in .env)');
     }
+
+    // Initialize Evidence Reminder Service (runs on startup + every 4 hours)
+    const { checkAndSendEvidenceReminders } = require('./services/reminder.service');
+    setTimeout(() => {
+        checkAndSendEvidenceReminders();
+    }, 10000);
+    setInterval(() => {
+        checkAndSendEvidenceReminders();
+    }, 4 * 60 * 60 * 1000);
 });

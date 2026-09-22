@@ -106,10 +106,16 @@ const contractSchema = new mongoose.Schema({
     additionDuration: String,
     additionDocumentPath: String,
     baseDocumentPath: String,
+    actaInicioPath: String,
+    rpPath: String,
     rutPath: String,
     bankCertificatePath: String,
     securitySocialPath: String,
     stampsPath: String,
+    lastEvidenceReminderDate: {
+        type: String,
+        default: ""
+    },
     createdAt: {
         type: Date,
         default: Date.now

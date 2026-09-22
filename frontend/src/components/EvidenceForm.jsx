@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import api from '../utils/api';
+import { filterSpecificObligations } from '../utils/period.utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText, Calendar, Plus, Trash2 } from 'lucide-react';
+import { CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText, Calendar, Plus, Trash2, Sparkles } from 'lucide-react';
 
 const EvidenceForm = ({ onComplete, contract }) => {
     const [step, setStep] = useState(1);
+    const [improving, setImproving] = useState(false);
     const [formData, setFormData] = useState({
         activity: '',
         date: new Date().toISOString().split('T')[0],
@@ -12,7 +14,29 @@ const EvidenceForm = ({ onComplete, contract }) => {
         files: []
     });
 
-    const activities = contract?.activities || [];
+    const handleImproveDescription = async () => {
+        if (!formData.description || !formData.description.trim()) {
+            alert('Por favor escribe primero una idea o breve descripción para que la IA pueda enriquecerla.');
+            return;
+        }
+        setImproving(true);
+        try {
+            const { data } = await api.post('/billing/improve-evidence-text', {
+                rawText: formData.description,
+                obligationText: formData.activity || ''
+            });
+            if (data.improvedText) {
+                setFormData(prev => ({ ...prev, description: data.improvedText }));
+            }
+        } catch (err) {
+            console.error('Error mejorando texto:', err);
+            alert('No se pudo mejorar el texto con IA: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setImproving(false);
+        }
+    };
+
+    const activities = filterSpecificObligations(contract?.activities || []);
 
     const nextStep = () => setStep(s => s + 1);
     const prevStep = () => setStep(s => s - 1);
@@ -136,14 +160,54 @@ const EvidenceForm = ({ onComplete, contract }) => {
                                 Paso 2: Subida de Evidencias
                             </h2>
                             <div className="form-group">
-                                <label className="label">Descripción Breve</label>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                    <label className="label" style={{ margin: 0 }}>Descripción Breve de la Actividad</label>
+                                    <button
+                                        type="button"
+                                        className="btn"
+                                        onClick={handleImproveDescription}
+                                        disabled={improving || !formData.description?.trim()}
+                                        title="Mejora tu idea redactando una descripción técnica formal (30 a 50 palabras)"
+                                        style={{
+                                            fontSize: '0.75rem',
+                                            padding: '0.25rem 0.65rem',
+                                            background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: 'var(--radius-sm)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.35rem',
+                                            cursor: improving || !formData.description?.trim() ? 'not-allowed' : 'pointer',
+                                            opacity: !formData.description?.trim() ? 0.6 : 1
+                                        }}
+                                    >
+                                        <Sparkles size={13} />
+                                        {improving ? 'Redactando con IA...' : '✨ Mejorar con IA (30-50 palabras)'}
+                                    </button>
+                                </div>
                                 <textarea 
                                     className="input" 
                                     rows="3"
-                                    placeholder="Describe lo realizado..."
+                                    placeholder="Describe brevemente la idea de la actividad y presiona 'Mejorar con IA'..."
                                     value={formData.description}
                                     onChange={(e) => setFormData({...formData, description: e.target.value})}
                                 />
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                                    {(() => {
+                                        const count = formData.description ? formData.description.trim().split(/\s+/).filter(Boolean).length : 0;
+                                        const inRange = count >= 30 && count <= 50;
+                                        return (
+                                            <span style={{
+                                                fontSize: '0.72rem',
+                                                color: inRange ? 'var(--success)' : 'var(--text-muted)',
+                                                fontWeight: inRange ? 600 : 400
+                                            }}>
+                                                {count} palabras {inRange ? '✓ (rango ideal)' : ''}
+                                            </span>
+                                        );
+                                    })()}
+                                </div>
                             </div>
                             
                             <div 

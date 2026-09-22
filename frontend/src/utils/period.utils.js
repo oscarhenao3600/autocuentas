@@ -1,8 +1,8 @@
 /**
- * Utilidades para cálculo de periodos y filtrado de obligaciones
+ * Utilidades para cálculo de periodos y filtrado de obligaciones en frontend
  */
 
-const GENERAL_OBLIGATION_PATTERNS = [
+export const GENERAL_OBLIGATION_PATTERNS = [
     /informes?\s+mensual(es)?/i,
     /supervisor.*interventor/i,
     /plataforma.*secop/i,
@@ -18,53 +18,30 @@ const GENERAL_OBLIGATION_PATTERNS = [
     /no\s+acceder\s+a\s+peticiones/i
 ];
 
-/**
- * Determina si un texto corresponde a una obligación general del contratista
- * @param {string} text 
- * @returns {boolean}
- */
-const isGeneralObligation = (text) => {
+export const isGeneralObligation = (text) => {
     if (!text || typeof text !== 'string') return false;
     const trimmed = text.trim();
     if (/^2\.1(\.|\s|$)/i.test(trimmed)) return true;
     return GENERAL_OBLIGATION_PATTERNS.some(regex => regex.test(trimmed));
 };
 
-/**
- * Filtra un arreglo de actividades/obligaciones dejando únicamente las específicas
- * @param {Array<string>} activities 
- * @returns {Array<string>}
- */
-const filterSpecificObligations = (activities) => {
+export const filterSpecificObligations = (activities) => {
     if (!Array.isArray(activities)) return [];
     const filtered = activities.filter(act => !isGeneralObligation(act));
     return filtered.length > 0 ? filtered : activities;
 };
 
-/**
- * Formatea un objeto Date a string YYYY-MM-DD sin desfaces de zona horaria
- */
-const formatDateStr = (date) => {
+export const formatDateStr = (date) => {
     const pad = (n) => String(n).padStart(2, '0');
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
 
-/**
- * Calcula los periodos de cobro de un contrato de forma dinámica
- * @param {string} startDateStr - Fecha de inicio del contrato (YYYY-MM-DD)
- * @param {number} initialMonths - Cantidad de periodos/meses iniciales (ej: 4)
- * @param {number} additionMonths - Cantidad de periodos/meses de adición (ej: 2)
- * @param {string} periodType - Tipo de periodo ('mes_cumplido' o '30_dias')
- * @param {string} [endDateStr] - Fecha de terminación oficial del contrato (opcional, YYYY-MM-DD)
- * @returns {Array} - Listado de periodos con fechas exactas
- */
-const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, periodType = 'mes_cumplido', endDateStr = null) => {
+export const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, periodType = 'mes_cumplido', endDateStr = null) => {
     if (!startDateStr) return [];
 
     let periods = [];
     const totalPeriods = Math.max(1, Number(initialMonths || 4) + Number(additionMonths || 0));
     
-    // Parseo seguro de fecha local YYYY-MM-DD
     const rawDatePart = startDateStr.split('T')[0];
     const [y, m, d] = rawDatePart.split('-').map(Number);
     let currentStart = new Date(y, m - 1, d);
@@ -82,14 +59,10 @@ const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, p
         let currentEnd;
         
         if (periodType === '30_dias') {
-            // Cada periodo dura exactamente 30 días calendario
-            // Sumamos 29 días a la fecha de inicio para que el periodo sea de 30 días inclusivo
-            // Ej: 28 de agosto al 26 de septiembre (4 días en agosto + 26 en sept = 30 días)
+            // Cada periodo dura 30 días calendario (inicio + 29 días)
             currentEnd = new Date(currentStart.getFullYear(), currentStart.getMonth(), currentStart.getDate() + 29);
         } else {
-            // Modalidad "Mes Cumplido"
-            // El periodo va del día X al día X - 1 del siguiente mes
-            // Ej: 28 de agosto al 27 de septiembre
+            // Mes Cumplido: va del día X al día X - 1 del mes siguiente
             const startYear = currentStart.getFullYear();
             const startMonth = currentStart.getMonth();
             const startDay = currentStart.getDate();
@@ -115,7 +88,6 @@ const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, p
             isAddition: i > Number(initialMonths || 4)
         });
         
-        // El siguiente periodo inicia al día siguiente del fin del periodo actual
         currentStart = new Date(currentEnd.getFullYear(), currentEnd.getMonth(), currentEnd.getDate() + 1);
         if (parsedEnd && currentStart > parsedEnd) {
             break;
@@ -123,11 +95,4 @@ const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, p
     }
     
     return periods;
-};
-
-module.exports = {
-    calculatePeriods,
-    isGeneralObligation,
-    filterSpecificObligations,
-    formatDateStr
 };

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
+import { calculatePeriods, filterSpecificObligations } from '../utils/period.utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText,
     Shield, Plus, Trash2, AlertCircle, Package, Download,
-    MessageCircle, Clock
+    MessageCircle, Clock, Sparkles
 } from 'lucide-react';
 
 const STEP_LABELS = [
@@ -71,32 +72,6 @@ function DropZone({ id, onFiles }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, periodType = 'mes_cumplido') => {
-    if (!startDateStr) return [];
-    let periods = [];
-    const totalPeriods = Number(initialMonths) + Number(additionMonths || 0);
-    let currentStart = new Date(startDateStr + 'T00:00:00');
-    
-    for (let i = 1; i <= totalPeriods; i++) {
-        let currentEnd = new Date(currentStart);
-        if (periodType === '30_dias') {
-            currentEnd.setDate(currentStart.getDate() + 29);
-        } else {
-            currentEnd.setMonth(currentEnd.getMonth() + 1);
-            currentEnd.setDate(currentEnd.getDate() - 1);
-        }
-        periods.push({
-            actNumber: i,
-            from: currentStart.toISOString().split('T')[0],
-            to: currentEnd.toISOString().split('T')[0],
-            isAddition: i > Number(initialMonths)
-        });
-        currentStart = new Date(currentEnd);
-        currentStart.setDate(currentStart.getDate() + 1);
-    }
-    return periods;
-};
-
 export default function BillingForm({ contract, onComplete }) {
     const today = new Date();
     const cutoff = contract?.cutoffDay || 25;
@@ -121,7 +96,8 @@ export default function BillingForm({ contract, onComplete }) {
             contract.startDate,
             contract.initialDurationMonths || 4,
             contract.additionDurationMonths || 0,
-            contract.periodType || 'mes_cumplido'
+            contract.periodType || 'mes_cumplido',
+            contract.endDate
         );
     }, [contract]);
 
@@ -137,10 +113,10 @@ export default function BillingForm({ contract, onComplete }) {
     }, [selectedAct, periodsList]);
 
 
-    // Build initial activities from contract obligations
+    // Build initial activities from contract specific obligations only
     const [activities, setActivities] = useState(
-        (contract?.activities || []).map((text, i) => ({
-            obligationCode: `2.${i + 1}`,
+        filterSpecificObligations(contract?.activities || []).map((text, i) => ({
+            obligationCode: `2.2.${i + 1}`,
             obligationText: text,
             comment: '',
             files: []
@@ -187,6 +163,31 @@ export default function BillingForm({ contract, onComplete }) {
     // ── Step navigation ─────────────────────────────────────
     const next = () => setStep(s => Math.min(s + 1, 4));
     const prev = () => setStep(s => Math.max(s - 1, 1));
+
+    const [improvingIdx, setImprovingIdx] = useState(null);
+
+    const handleImproveComment = async (idx) => {
+        const rawText = activities[idx]?.comment;
+        if (!rawText || !rawText.trim()) {
+            alert('Por favor escribe primero una idea o breve descripción para que la IA pueda enriquecerla.');
+            return;
+        }
+        setImprovingIdx(idx);
+        try {
+            const { data } = await api.post('/billing/improve-evidence-text', {
+                rawText: rawText,
+                obligationText: activities[idx]?.obligationText || ''
+            });
+            if (data.improvedText) {
+                updateActivity(idx, 'comment', data.improvedText);
+            }
+        } catch (err) {
+            console.error('Error mejorando texto:', err);
+            alert('No se pudo mejorar el texto con IA: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setImprovingIdx(null);
+        }
+    };
 
     const updateActivity = (idx, field, value) => {
         setActivities(prev => prev.map((a, i) => i === idx ? { ...a, [field]: value } : a));
@@ -419,13 +420,55 @@ export default function BillingForm({ contract, onComplete }) {
                                         <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                             {/* Comment */}
                                             <div className="form-group" style={{ margin: 0 }}>
-                                                <label className="label">Comentario de lo realizado <span style={{ color: 'var(--error)' }}>*</span></label>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                                    <label className="label" style={{ margin: 0 }}>
+                                                        Comentario de lo realizado <span style={{ color: 'var(--error)' }}>*</span>
+                                                    </label>
+                                                    <button
+                                                        type="button"
+                                                        className="btn"
+                                                        onClick={() => handleImproveComment(idx)}
+                                                        disabled={improvingIdx === idx || !act.comment?.trim()}
+                                                        title="Mejora tu idea redactando una descripción técnica formal (30 a 50 palabras)"
+                                                        style={{
+                                                            fontSize: '0.75rem',
+                                                            padding: '0.25rem 0.65rem',
+                                                            background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
+                                                            color: 'white',
+                                                            border: 'none',
+                                                            borderRadius: 'var(--radius-sm)',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.35rem',
+                                                            cursor: improvingIdx === idx || !act.comment?.trim() ? 'not-allowed' : 'pointer',
+                                                            opacity: !act.comment?.trim() ? 0.6 : 1
+                                                        }}
+                                                    >
+                                                        <Sparkles size={13} />
+                                                        {improvingIdx === idx ? 'Redactando con IA...' : '✨ Mejorar con IA (30-50 palabras)'}
+                                                    </button>
+                                                </div>
                                                 <textarea
                                                     className="input" rows={3}
-                                                    placeholder="Describe detalladamente la actividad realizada este mes..."
+                                                    placeholder="Describe brevemente la idea de la actividad realizada y presiona 'Mejorar con IA'..."
                                                     value={act.comment}
                                                     onChange={e => updateActivity(idx, 'comment', e.target.value)}
                                                 />
+                                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                                                    {(() => {
+                                                        const count = act.comment ? act.comment.trim().split(/\s+/).filter(Boolean).length : 0;
+                                                        const inRange = count >= 30 && count <= 50;
+                                                        return (
+                                                            <span style={{
+                                                                fontSize: '0.72rem',
+                                                                color: inRange ? 'var(--success)' : 'var(--text-muted)',
+                                                                fontWeight: inRange ? 600 : 400
+                                                            }}>
+                                                                {count} palabras {inRange ? '✓ (rango ideal)' : ''}
+                                                            </span>
+                                                        );
+                                                    })()}
+                                                </div>
                                             </div>
 
                                             {/* Evidence upload */}

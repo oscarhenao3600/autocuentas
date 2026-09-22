@@ -1,5 +1,7 @@
 const Contract = require('../models/Contract');
-const { extractContractData, extractRpData, extractBankCertificateData } = require('../services/gemini.service');
+const { extractContractData, extractRpData, extractBankCertificateData, extractActaInicioData } = require('../services/gemini.service');
+const { filterSpecificObligations } = require('../utils/period.utils');
+const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
 exports.uploadBaseContract = async (req, res) => {
     try {
@@ -9,6 +11,11 @@ exports.uploadBaseContract = async (req, res) => {
 
         // 1. Extract data with Gemini
         const extractedData = await extractContractData(req.file.path);
+
+        // Filter out general obligations if any were extracted
+        if (extractedData.activities && Array.isArray(extractedData.activities)) {
+            extractedData.activities = filterSpecificObligations(extractedData.activities);
+        }
 
         // 2. Save or Update in DB
         let contract = await Contract.findOne({ user: req.user._id });
@@ -227,4 +234,54 @@ exports.uploadAdditionRp = async (req, res) => {
         res.status(500).json({ message: 'Error al procesar el RP de la adición', error: error.message });
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/contracts/upload-acta-inicio  →  Process Acta de Inicio with Gemini
+// ──────────────────────────────────────────────────────────────
+exports.uploadActaInicio = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Por favor suba el documento del Acta de Inicio' });
+        }
+
+        const actaData = await extractActaInicioData(req.file.path);
+
+        let contract = await Contract.findOne({ user: req.user._id });
+        if (!contract) {
+            return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar el Acta de Inicio' });
+        }
+
+        contract.actaInicioPath = req.file.path;
+        if (actaData.startDate) contract.startDate = actaData.startDate;
+        if (actaData.endDate) contract.endDate = actaData.endDate;
+        if (actaData.contractNumber && !contract.contractNumber) contract.contractNumber = actaData.contractNumber;
+        if (actaData.supervisorName && !contract.supervisorName) contract.supervisorName = actaData.supervisorName;
+        if (actaData.initialDurationMonths) contract.initialDurationMonths = Number(actaData.initialDurationMonths);
+
+        await contract.save();
+
+        res.json({
+            message: 'Acta de Inicio procesada con éxito por la IA',
+            extracted: actaData,
+            data: contract
+        });
+    } catch (error) {
+        console.error('Error uploadActaInicio:', error);
+        res.status(500).json({ message: 'Error al procesar el Acta de Inicio', error: error.message });
+    }
+};
+
+exports.getEvidenceReminderStatus = async (req, res) => {
+    try {
+        const contract = await Contract.findOne({ user: req.user._id });
+        if (!contract) return res.json({ needsReminder: false });
+        const status = await checkContractEvidenceStatus(contract, req.user);
+        res.json(status || { needsReminder: false });
+    } catch (error) {
+        console.error('Error en getEvidenceReminderStatus:', error);
+        res.status(500).json({ message: 'Error al verificar recordatorios', error: error.message });
+    }
+};
+
+
 

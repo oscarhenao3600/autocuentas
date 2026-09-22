@@ -7,7 +7,8 @@ const {
     generatePackage,
     downloadPackage,
     getTelegramCode,
-    uploadPlanillaSocial
+    uploadPlanillaSocial,
+    improveEvidenceText
 } = require('../controllers/billing.controller');
 const { protect }  = require('../middleware/auth.middleware');
 const upload       = require('../middleware/upload.middleware');
@@ -21,6 +22,9 @@ router.get('/',              protect, listMyBillingPeriods);
 
 // Upload and process Security Social Planilla PDF with Gemini
 router.post('/upload-planilla', protect, upload.single('planillaFile'), uploadPlanillaSocial);
+
+// Improve evidence description using Gemini AI
+router.post('/improve-evidence-text', protect, improveEvidenceText);
 
 // Get a single billing period
 router.get('/:id',           protect, getBillingPeriod);
