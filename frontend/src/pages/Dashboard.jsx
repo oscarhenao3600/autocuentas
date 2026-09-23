@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import {
     LogOut, User, Users, Settings, FileText, Upload, AlertCircle,
-    ChevronRight, Calendar, MessageCircle, Package, Download, Clock
+    ChevronRight, Calendar, MessageCircle, Package, Download, Clock, Shield, Layers
 } from 'lucide-react';
 import BillingForm from '../components/BillingForm';
 import { calculatePeriods } from '../utils/period.utils';
@@ -28,19 +28,21 @@ function StatCard({ icon, label, value, accent, onClick }) {
             className="glass"
             onClick={onClick}
             style={{
-                padding: '1.5rem', borderRadius: 'var(--radius-lg)',
-                boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: '0.75rem',
+                padding: '1.25rem 1.5rem',
+                borderRadius: 'var(--radius-lg)',
+                boxShadow: 'var(--shadow)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '1rem',
                 cursor: onClick ? 'pointer' : 'default',
-                borderLeft: `4px solid ${accent || 'var(--primary)'}`,
-                transition: 'transform 0.18s',
+                transition: 'transform 0.2s, box-shadow 0.2s',
+                borderLeft: accent ? `4px solid ${accent}` : 'none'
             }}
-            onMouseEnter={e => onClick && (e.currentTarget.style.transform = 'translateY(-2px)')}
-            onMouseLeave={e => onClick && (e.currentTarget.style.transform = 'translateY(0)')}
         >
-            <div style={{ color: accent || 'var(--primary)' }}>{icon}</div>
+            <div style={{ color: accent || 'var(--primary)', flexShrink: 0 }}>{icon}</div>
             <div>
-                <p style={{ fontSize: '1.75rem', fontWeight: 800, lineHeight: 1 }}>{value}</p>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: '0.25rem' }}>{label}</p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>{label}</p>
+                <p style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>{value}</p>
             </div>
         </div>
     );
@@ -131,7 +133,27 @@ const Dashboard = () => {
                     <h2 style={{ fontSize: '1.25rem' }}>Formatos Cuentas</h2>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <button 
+                        onClick={() => navigate('/contract-setup')} 
+                        className="btn" 
+                        style={{ 
+                            background: 'rgba(59, 130, 246, 0.1)', 
+                            color: 'var(--primary)', 
+                            border: '1px solid rgba(59, 130, 246, 0.25)', 
+                            padding: '0.45rem 0.9rem',
+                            fontSize: '0.85rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-md)'
+                        }}
+                    >
+                        <FileText size={15} />
+                        <span>Mi Contrato</span>
+                    </button>
+
                     <div className="hide-mobile" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <div style={{ textAlign: 'right' }}>
                             <p style={{ fontSize: '0.875rem', fontWeight: '600' }}>{user.fullName}</p>
@@ -180,32 +202,70 @@ const Dashboard = () => {
                     <>
                         {/* ── Admin cards ─────────────────────────────────── */}
                         {user.role === 'admin' && (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
-                                <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
-                                    <Users size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
-                                    <h3 style={{ marginBottom: '0.5rem' }}>Directorio de Contratistas</h3>
-                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Consulta los usuarios inscritos identificados por su número de cédula.</p>
-                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/users')}>Ver Funcionarios</button>
+                            <div style={{ marginBottom: '2.5rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+                                    <Shield size={20} color="var(--primary)" />
+                                    <h2 style={{ fontSize: '1.25rem', margin: 0, fontWeight: 700 }}>Panel de Administración</h2>
                                 </div>
-                                <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
-                                    <Settings size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
-                                    <h3 style={{ marginBottom: '0.5rem' }}>Configurar Formatos</h3>
-                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Gestiona las plantillas de Word y PDF para las cuentas de cobro.</p>
-                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/formats')}>Ir a Configuración</button>
-                                </div>
-                                <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
-                                    <FileText size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
-                                    <h3 style={{ marginBottom: '0.5rem' }}>Cuentas Pendientes</h3>
-                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Revisa las cuentas de cobro generadas por los contratistas.</p>
-                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/accounts')}>Ver Cuentas</button>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
+                                    <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
+                                        <Users size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
+                                        <h3 style={{ marginBottom: '0.5rem' }}>Directorio de Contratistas</h3>
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Consulta y gestiona los usuarios inscritos identificados por su número de cédula.</p>
+                                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/users')}>Ver Funcionarios</button>
+                                    </div>
+                                    <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
+                                        <Settings size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
+                                        <h3 style={{ marginBottom: '0.5rem' }}>Configurar Formatos</h3>
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Gestiona las plantillas de Word y PDF para las cuentas de cobro.</p>
+                                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/formats')}>Ir a Configuración</button>
+                                    </div>
+                                    <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
+                                        <FileText size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
+                                        <h3 style={{ marginBottom: '0.5rem' }}>Cuentas Pendientes</h3>
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Revisa las cuentas de cobro generadas por los contratistas.</p>
+                                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/accounts')}>Ver Cuentas</button>
+                                    </div>
+                                    <div className="glass" style={{ padding: '2rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)' }}>
+                                        <Layers size={32} color="var(--primary)" style={{ marginBottom: '1rem' }} />
+                                        <h3 style={{ marginBottom: '0.5rem' }}>Documentos y ZIPs</h3>
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Visualiza, descarga y elimina soportes o paquetes ZIP para su corrección.</p>
+                                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/admin/documents')}>Gestionar Archivos</button>
+                                    </div>
                                 </div>
                             </div>
                         )}
 
-                        {/* ── Client cards ────────────────────────────────── */}
-                        {user.role !== 'admin' && (
-                            <>
-                                {/* Reminder Alert Banner: <= 5 days and 0 evidences */}
+                        {/* Section header for personal contract and billing accounts */}
+                        {user.role === 'admin' && (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <FileText size={20} color="var(--primary)" />
+                                    <h2 style={{ fontSize: '1.25rem', margin: 0, fontWeight: 700 }}>Mis Cuentas de Cobro</h2>
+                                </div>
+                                <button 
+                                    className="btn" 
+                                    onClick={() => navigate('/contract-setup')}
+                                    style={{ 
+                                        background: 'transparent', 
+                                        border: '1px solid var(--border)', 
+                                        color: 'var(--text-main)', 
+                                        fontSize: '0.825rem',
+                                        padding: '0.4rem 0.8rem',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.4rem',
+                                        cursor: 'pointer',
+                                        borderRadius: 'var(--radius-md)'
+                                    }}
+                                >
+                                    <Settings size={14} /> {contract ? 'Configuración de Mi Contrato' : 'Configurar Mi Contrato'}
+                                </button>
+                            </div>
+                        )}
+
+                        {/* ── Contractor cards & alerts (always available for both contractors and admin) ── */}
+                        {/* Reminder Alert Banner: <= 5 days and 0 evidences */}
                                 {reminderStatus?.needsReminder && (
                                     <div className="glass animate-fade-in" style={{
                                         padding: '1.25rem 1.5rem',
@@ -254,15 +314,15 @@ const Dashboard = () => {
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
                                             <AlertCircle size={40} color="var(--accent)" />
                                             <div>
-                                                <h3 style={{ color: 'var(--text-main)' }}>Configuración Requerida</h3>
+                                                <h3 style={{ color: 'var(--text-main)' }}>Configuración de Contrato Requerida</h3>
                                                 <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                                                    Debes configurar tu contrato base antes de generar cuentas de cobro.
+                                                    Para comenzar a generar tus cuentas de cobro por el sistema, primero debes registrar o subir los datos de tu contrato base (minuta en PDF).
                                                 </p>
                                             </div>
                                         </div>
                                         <button className="btn" onClick={() => navigate('/contract-setup')}
                                             style={{ background: 'var(--accent)', color: 'white', width: '100%', gap: '0.5rem' }}>
-                                            Configurar Ahora <ChevronRight size={18} />
+                                            Configurar Mi Contrato <ChevronRight size={18} />
                                         </button>
                                     </div>
                                 )}
@@ -360,8 +420,6 @@ const Dashboard = () => {
                                 )}
                             </>
                         )}
-                    </>
-                )}
             </main>
         </div>
     );

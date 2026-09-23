@@ -77,6 +77,10 @@ const billingPeriodSchema = new mongoose.Schema({
         type: String,
         default: ""
     },
+    securitySocialPath: {
+        type: String,
+        default: ""
+    },
     createdAt: {
         type: Date,
         default: Date.now

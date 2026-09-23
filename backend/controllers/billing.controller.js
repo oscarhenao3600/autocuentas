@@ -47,6 +47,31 @@ function monthYearEs(dateInput) {
     return { mes: MONTHS_ES[d.getMonth()].toUpperCase(), anio: d.getFullYear().toString() };
 }
 
+function formatActivitiesText(acts) {
+    if (!acts || acts.length === 0) return 'No se registraron actividades en el periodo.';
+    return acts.map((act, i) => {
+        const code = act.obligationCode || `2.2.${i + 1}`;
+        const text = act.obligationText || '';
+        const comment = (act.comment && act.comment.trim().length > 0)
+            ? act.comment.trim()
+            : 'Actividades ejecutadas a satisfacción durante el periodo reportado.';
+        return `Obligación ${code}: ${text}\nActividad desarrollada: ${comment}`;
+    }).join('\n\n');
+}
+
+function formatEvidencesText(acts) {
+    if (!acts || acts.length === 0) return 'Archivos de soporte digital anexos en el paquete de cobro.';
+    return acts.map((act, i) => {
+        const code = act.obligationCode || `2.2.${i + 1}`;
+        if (act.evidences && act.evidences.length > 0) {
+            const files = act.evidences.map(e => e.filename || 'Archivo adjunto').join(', ');
+            return `Obligación ${code}: Soporte digital en carpeta ${code} (${files})`;
+        } else {
+            return `Obligación ${code}: Soporte digital en carpeta ${code}`;
+        }
+    }).join('\n');
+}
+
 // ──────────────────────────────────────────────────────────────
 // GET /api/billing  →  List all billing periods for the logged user
 // ──────────────────────────────────────────────────────────────
@@ -116,6 +141,12 @@ exports.saveBillingPeriod = async (req, res) => {
             try { parsedSS = JSON.parse(securitySocial); } catch (_) { parsedSS = {}; }
         }
 
+        // Handle security social file path if provided
+        let ssPath = req.body.securitySocialPath || '';
+        if (req.files && req.files['securitySocialFile'] && req.files['securitySocialFile'][0]) {
+            ssPath = req.files['securitySocialFile'][0].path;
+        }
+
         // Upsert: one draft per actNumber per user (status pending)
         let period = await BillingPeriod.findOne({
             user: req.user._id,
@@ -128,6 +159,7 @@ exports.saveBillingPeriod = async (req, res) => {
             period.periodTo      = periodTo     || period.periodTo;
             period.activities    = parsedActivities || period.activities;
             period.securitySocial = parsedSS    || period.securitySocial;
+            if (ssPath) period.securitySocialPath = ssPath;
             await period.save();
         } else {
             period = await BillingPeriod.create({
@@ -136,8 +168,13 @@ exports.saveBillingPeriod = async (req, res) => {
                 periodFrom,
                 periodTo,
                 activities:     parsedActivities || [],
-                securitySocial: parsedSS || {}
+                securitySocial: parsedSS || {},
+                securitySocialPath: ssPath
             });
+        }
+
+        if (ssPath) {
+            await Contract.findOneAndUpdate({ user: req.user._id }, { securitySocialPath: ssPath });
         }
 
         res.json({ message: 'Borrador guardado correctamente', data: period });
@@ -166,8 +203,8 @@ exports.generatePackage = async (req, res) => {
         await contract.save();
 
         // ── Determine Addition logic ──────────────────────────────
-        // If the contract has an addition, we apply addition formatting from the last month of the initial contract onwards
-        const periodIsAddition = contract.hasAddition && (period.actNumber >= (contract.initialDurationMonths || 4));
+        // If the contract has an addition, we apply addition formatting once initial duration acts are completed
+        const periodIsAddition = contract.hasAddition && (period.actNumber > (contract.initialDurationMonths || 4));
         
         const rawTotalVal = parseFloat(contract.totalValue) || 0;
         const rawAddVal = parseFloat(contract.additionValue) || 0;
@@ -254,11 +291,11 @@ exports.generatePackage = async (req, res) => {
             tipo_contrato:                     contract.contractType || 'Prestación de Servicios Profesionales',
             numero_contrato:                   contract.contractNumber || '',
             fecha_acta_inicio:                 contract.startDate ? formatDateEs(contract.startDate) : '',
-            fecha_terminacion:                 contract.endDate ? formatDateEs(contract.endDate) : '',
-            cdp:                               contract.cdp || '',
-            rp:                                contract.rp || '',
-            rubro_presupuestal:                contract.rubro || '',
-            valor_total:                       totalValFormatted,
+            fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateEs(contract.additionEndDate) : (contract.endDate ? formatDateEs(contract.endDate) : ''),
+            cdp:                               periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
+            rp:                                periodIsAddition ? (contract.additionRp || contract.rp || '') : (contract.rp || ''),
+            rubro_presupuestal:                periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
+            valor_total:                       contract.hasAddition ? combinedTotalVal.toLocaleString('es-CO') : totalValFormatted,
             entidad_bancaria:                  contract.bankName || '',
             valor_autorizado_pago:             monthlyValFormatted,
             numero_cuenta:                     contract.accountNumber || '',
@@ -288,6 +325,40 @@ exports.generatePackage = async (req, res) => {
             chk_noveno:                        period.actNumber === 9 ? "[ X ]" : "[   ]",
             chk_otros:                         period.actNumber > 9 ? "[ X ]" : "[   ]",
             otros_cual:                        period.actNumber > 9 ? (ACT_TEXTS[period.actNumber] || `PAGO ${period.actNumber}`) : "",
+
+            // ── NUEVAS VARIABLES (snake_case) para INFORME DE ACTIVIDADES ──
+            objeto_contrato:                   contract.contractObject || '',
+            plazo_ejecucion:                   contract.hasAddition && contract.additionDuration
+                ? `${contract.initialDurationMonths || 4} MESES MÁS ADICIÓN DE ${contract.additionDuration}`
+                : (contract.initialDurationMonths ? `${contract.initialDurationMonths} MESES` : (contract.additionDuration || 'CUATRO (04) MESES')),
+            acta_parcial_anio:                 anio,
+            acta_parcial_mes:                  mes,
+            acta_parcial_dia:                  period.periodTo ? (parseDateSafe(period.periodTo)?.getDate().toString() || '') : '',
+            numero_acta_parcial:               period.actNumber.toString(),
+            periodo_informado_inicio:          formatDateEs(period.periodFrom),
+            periodo_informado_fin:             formatDateEs(period.periodTo),
+            actividades_desarrolladas:         formatActivitiesText(period.activities),
+            evidencias_ejecucion:              formatEvidencesText(period.activities),
+            anticipo:                          "0",
+            valor_acta_1:                      period.actNumber >= 1 ? monthlyValFormatted : "0",
+            valor_acta_2:                      period.actNumber >= 2 ? monthlyValFormatted : "0",
+            valor_acta_3:                      period.actNumber >= 3 ? monthlyValFormatted : "0",
+            valor_acta_n:                      period.actNumber > 3 ? monthlyValFormatted : "0",
+            saldo_pendiente:                   remainingValFormatted,
+            otros_contratos_si:                "[   ]",
+            otros_contratos_no:                "[ X ]",
+            valor_ingresos_mensualizados:      monthlyValFormatted,
+            valor_ibc:                         ibc.toLocaleString('es-CO'),
+            entidad_pago_aportes:              period.securitySocial?.operator || 'SIMPLE',
+            valor_total_aporte:                ssTotalFormatted,
+            numero_recibo_aportes:             period.securitySocial?.planillaNumber || '',
+            periodo_cotizado_inicio:           formatDateEs(period.periodFrom),
+            periodo_cotizado_fin:              formatDateEs(period.periodTo),
+            chk_recibo_pago_ss:                "[ X ]",
+            chk_copias_planillas:              "[ X ]",
+            chk_anexos_otros:                  "[   ]",
+            observaciones:                     period.observations || "NINGUNA",
+            firma_supervisor:                  contract.supervisorName || '',
 
             // ── NUEVAS VARIABLES (snake_case) para DESCUENTO DE ESTAMPILLAS ──
             ciudad_fecha:                      `Armenia, ${formatDateEs(period.periodTo)}`,
@@ -346,9 +417,9 @@ exports.generatePackage = async (req, res) => {
             monthlyValue:     monthlyValFormatted,
             monthlyValueWord: contract.monthlyValueWord   || '',
             ibcValue:         ibc.toLocaleString('es-CO'),
-            rpNumber:         contract.rp                 || '',
-            cdpNumber:        contract.cdp                || '',
-            rubro:            contract.rubro              || '',
+            rpNumber:         periodIsAddition ? (contract.additionRp || contract.rp || '') : (contract.rp || ''),
+            cdpNumber:        periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
+            rubro:            periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
             actNumber:        period.actNumber.toString(),
             periodFrom:       formatDateEs(period.periodFrom),
             periodTo:         formatDateEs(period.periodTo),
@@ -480,9 +551,18 @@ exports.uploadPlanillaSocial = async (req, res) => {
         const extracted = await extractSecuritySocialData(req.file.path);
         console.log("Datos de planilla extraídos:", extracted);
 
+        // Save filePath to user's contract if available
+        if (req.user && req.user._id) {
+            await Contract.findOneAndUpdate(
+                { user: req.user._id },
+                { securitySocialPath: req.file.path }
+            );
+        }
+
         res.json({
             message: 'Planilla procesada con éxito por la IA',
-            data: extracted
+            data: extracted,
+            filePath: req.file.path
         });
     } catch (error) {
         console.error('Error uploadPlanillaSocial:', error);

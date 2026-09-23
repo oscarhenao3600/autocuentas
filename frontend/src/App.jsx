@@ -9,6 +9,7 @@ import MyDocuments from './pages/MyDocuments';
 import PendingAccounts from './pages/PendingAccounts';
 import ConfigureFormats from './pages/ConfigureFormats';
 import ContractorsList from './pages/ContractorsList';
+import AdminDocuments from './pages/AdminDocuments';
 
 const ProtectedRoute = ({ children }) => {
     const { user, loading } = useAuth();
@@ -77,6 +78,14 @@ function App() {
                         element={
                             <ProtectedRoute>
                                 <ContractorsList />
+                            </ProtectedRoute>
+                        } 
+                    />
+                    <Route 
+                        path="/admin/documents" 
+                        element={
+                            <ProtectedRoute>
+                                <AdminDocuments />
                             </ProtectedRoute>
                         } 
                     />

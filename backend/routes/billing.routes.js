@@ -13,9 +13,12 @@ const {
 const { protect }  = require('../middleware/auth.middleware');
 const upload       = require('../middleware/upload.middleware');
 
-// Multer config: accept up to 10 evidence files per activity (up to 10 activities = 100 files max)
-// Field names: evidence_0, evidence_1 ... evidence_9
-const evidenceFields = Array.from({ length: 10 }, (_, i) => ({ name: `evidence_${i}`, maxCount: 10 }));
+// Multer config: accept up to 10 evidence files per activity (up to 10 activities = 100 files max) + optional planilla file
+// Field names: evidence_0, evidence_1 ... evidence_9, securitySocialFile
+const evidenceFields = [
+    ...Array.from({ length: 10 }, (_, i) => ({ name: `evidence_${i}`, maxCount: 10 })),
+    { name: 'securitySocialFile', maxCount: 1 }
+];
 
 // List all billing periods for logged user
 router.get('/',              protect, listMyBillingPeriods);

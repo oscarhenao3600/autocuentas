@@ -1703,13 +1703,39 @@ const handleIncomingMessage = async (message) => {
             const code = parts[1].trim();
             const user = await User.findOne({ telegramVerificationCode: code });
             if (user) {
+                user.telegramChatId = chatId;
+                user.telegramVerificationCode = null;
+                await user.save();
+
+                const contract = await Contract.findOne({ user: user._id });
+
                 sessions.set(chatId, {
-                    state: 'awaiting_link_cedula',
-                    tempUser: user
+                    state: 'identified',
+                    userId: user._id,
+                    contractId: contract ? contract._id : null,
+                    cedula: contract?.idNumber || ''
                 });
-                await sendTelegramMessage(chatId, `👋 Hola ${user.fullName}.\n\nCódigo recibido. Por seguridad, escribe tu número de cédula registrado en el contrato para confirmar tu identidad:`);
+
+                let reply = `✅ ¡Cuenta vinculada exitosamente!\n\n`;
+                reply += `👋 Hola ${user.fullName}, tu cuenta de Telegram ha quedado conectada con éxito a tu usuario en el sistema.\n\n`;
+
+                if (!contract) {
+                    reply += `ℹ️ Nota: Aún no has configurado tu contrato base en la plataforma web.\n`;
+                    reply += `Ingresa a la aplicación web y haz clic en "Configurar Mi Contrato" para subir tu minuta y comenzar a radicar cuentas de cobro.`;
+                    await sendTelegramMessage(chatId, reply);
+                } else if (!contract.activities || contract.activities.length === 0) {
+                    reply += `⚠️ Tu contrato está registrado pero aún no tiene obligaciones específicas cargadas.\n\nPuedes cargar tu minuta en PDF para extraerlas.`;
+                    await sendTelegramMessage(chatId, reply);
+                } else {
+                    reply += `¿Qué deseas realizar hoy?`;
+                    await sendTelegramKeyboardMessage(chatId, reply, [
+                        [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+                        [{ text: '📄 Actualizar Documentos', callback_data: 'start_docs_flow' }],
+                        [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
+                    ]);
+                }
             } else {
-                await sendTelegramMessage(chatId, `❌ El código "${code}" es inválido o ya expiró.`);
+                await sendTelegramMessage(chatId, `❌ El código "${code}" es inválido o ya expiró. Por favor genera un nuevo código desde la aplicación web.`);
             }
         } else {
             sessions.set(chatId, { state: 'awaiting_identification' });

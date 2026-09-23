@@ -129,13 +129,19 @@ export default function BillingForm({ contract, onComplete }) {
     });
 
     const [uploadingPlanilla, setUploadingPlanilla] = useState(false);
+    const [planillaPath, setPlanillaPath] = useState(contract?.securitySocialPath || '');
+    const [planillaFile, setPlanillaFile] = useState(null);
 
     const handlePlanillaUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        setPlanillaFile(file);
 
         const formData = new FormData();
         formData.append('planillaFile', file);
+        if (contract?._id) {
+            formData.append('contractId', contract._id);
+        }
 
         setUploadingPlanilla(true);
         setError('');
@@ -143,6 +149,9 @@ export default function BillingForm({ contract, onComplete }) {
             const { data } = await api.post('/billing/upload-planilla', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
+            if (data.filePath) {
+                setPlanillaPath(data.filePath);
+            }
             const ext = data.data;
             setSs({
                 operator: ext.operator || '',
@@ -219,6 +228,12 @@ export default function BillingForm({ contract, onComplete }) {
                 }))
             ));
             fd.append('securitySocial', JSON.stringify(ss));
+            if (planillaPath) {
+                fd.append('securitySocialPath', planillaPath);
+            }
+            if (planillaFile) {
+                fd.append('securitySocialFile', planillaFile);
+            }
 
             // Attach evidence files per activity index
             activities.forEach((act, idx) => {

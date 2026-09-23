@@ -6,12 +6,18 @@ const {
     uploadTemplate, 
     getTemplates, 
     deleteTemplate,
-    getRegisteredContractors
+    getRegisteredContractors,
+    deleteUser,
+    getAllDocuments,
+    deleteDocument
 } = require('../controllers/admin.controller');
 const { protect, admin } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
 
 router.get('/users', protect, admin, getRegisteredContractors);
+router.delete('/users/:id', protect, admin, deleteUser);
+router.get('/documents', protect, admin, getAllDocuments);
+router.delete('/documents', protect, admin, deleteDocument);
 router.get('/accounts', protect, admin, getAllAccounts);
 router.put('/accounts/:id/status', protect, admin, updateAccountStatus);
 router.get('/templates', protect, admin, getTemplates);

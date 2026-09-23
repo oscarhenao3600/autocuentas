@@ -1,42 +1,65 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const PizZip = require('pizzip');
 
 /**
  * Genera el paquete comprimido (.zip) con todos los formatos y evidencias organizados
+ * Utiliza PizZip para compatibilidad multiplataforma nativa (Windows, Linux, Docker, etc.)
  * @param {Object} billingPeriod - El periodo de cobro con sus actividades y evidencias
  * @param {Object} contract - El contrato base con los anexos
  * @param {Object} user - El usuario contratista
  * @returns {Promise<string>} - La ruta del archivo comprimido generado
  */
 exports.createBillingZip = async (billingPeriod, contract, user) => {
-    const tempDirName = `temp_${billingPeriod._id}_${Date.now()}`;
-    const tempDirPath = path.join(__dirname, '..', 'generated', tempDirName);
     const outputDir = path.join(__dirname, '..', 'generated');
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+    }
     
     // Formatear nombre de archivo final
-    const safeName = user.fullName.replace(/[^a-zA-Z0-9]/g, '_');
+    const safeName = (user.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_');
     const zipName = `Cuenta_Cobro_${safeName}_Acta_${billingPeriod.actNumber}.zip`;
     const zipPath = path.join(outputDir, zipName);
 
     try {
-        // 1. Crear directorio temporal
-        if (!fs.existsSync(tempDirPath)) {
-            fs.mkdirSync(tempDirPath, { recursive: true });
-        }
+        const zip = new PizZip();
 
-        // Helper para copiar archivos de forma segura
-        const copyFileSafe = (srcPath, destName) => {
-            if (srcPath && fs.existsSync(srcPath)) {
-                const destPath = path.join(tempDirPath, destName);
-                fs.copyFileSync(srcPath, destPath);
-                return true;
+        // Helper para resolver rutas de manera segura y agnóstica al SO/Docker
+        const resolveSafePath = (filePath) => {
+            if (!filePath) return null;
+            if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
+            if (fs.existsSync(filePath)) return path.resolve(filePath);
+            const fromBackend = path.resolve(__dirname, '..', filePath);
+            if (fs.existsSync(fromBackend)) return fromBackend;
+            const normalized = filePath.replace(/\\/g, '/');
+            const fromBackendNorm = path.resolve(__dirname, '..', normalized);
+            if (fs.existsSync(fromBackendNorm)) return fromBackendNorm;
+            return null;
+        };
+
+        // Helper para agregar archivo al ZIP de forma segura
+        const addFileToZip = (srcPath, zipRelativePath) => {
+            const resolved = resolveSafePath(srcPath);
+            if (resolved) {
+                try {
+                    const data = fs.readFileSync(resolved);
+                    zip.file(zipRelativePath, data);
+                    return true;
+                } catch (e) {
+                    console.warn(`⚠️ No se pudo leer archivo ${resolved}:`, e.message);
+                }
+            } else {
+                console.warn(`⚠️ Archivo no encontrado para ${zipRelativePath}: ${srcPath}`);
             }
             return false;
         };
 
-        // 2. Copiar formatos generados (.docx)
-        // billing.controller sets: certificadoPath, informePath, estampillasPath, retencionPath
+        const getZipDest = (baseName, srcPath, defaultExt = '.pdf') => {
+            const ext = srcPath ? (path.extname(srcPath) || defaultExt) : defaultExt;
+            return `${baseName}${ext}`;
+        };
+
+        // 1. Copiar los 4 formatos Word generados (.docx)
         const generatedFiles = [
             { field: 'certificadoPath',  dest: '1-CERTIFICADO DEL SUPERVISOR.docx' },
             { field: 'informePath',      dest: '2-INFORME DE ACTIVIDADES.docx' },
@@ -46,74 +69,59 @@ exports.createBillingZip = async (billingPeriod, contract, user) => {
 
         generatedFiles.forEach(file => {
             const srcPath = billingPeriod[file.field];
-            if (srcPath && fs.existsSync(srcPath)) {
-                fs.copyFileSync(srcPath, path.join(tempDirPath, file.dest));
-            } else {
+            if (!addFileToZip(srcPath, file.dest)) {
                 console.warn(`⚠️ Archivo no encontrado para ${file.dest}: ${srcPath}`);
             }
         });
 
-        // 3. Copiar documentos anexos del contrato
+        // 2. Copiar documentos anexos oficiales del contrato
         if (contract) {
-            copyFileSafe(contract.rutPath, '8-RUT.pdf');
-            copyFileSafe(contract.bankCertificatePath, '9-CERTIFICADO DE CUENTA BANCARIA.pdf');
-            // Nota: El contratista sube la Planilla de seguridad social del mes respectivo
-            // y la cargaremos desde el periodo de cobro o contrato
-            if (billingPeriod.securitySocialPath) {
-                copyFileSafe(billingPeriod.securitySocialPath, '10-PLANILLA DE SEGURIDAD SOCIAL.pdf');
-            } else if (contract.securitySocialPath) {
-                copyFileSafe(contract.securitySocialPath, '10-PLANILLA DE SEGURIDAD SOCIAL.pdf');
-            }
+            if (contract.actaInicioPath) addFileToZip(contract.actaInicioPath, getZipDest('5-ACTA DE INICIO', contract.actaInicioPath));
+            if (contract.rpPath) addFileToZip(contract.rpPath, getZipDest('6-REGISTRO PRESUPUESTAL', contract.rpPath));
+            if (contract.baseDocumentPath) addFileToZip(contract.baseDocumentPath, getZipDest('7-MINUTA DEL CONTRATO', contract.baseDocumentPath));
+
+            // Adición contractual (si aplica)
+            if (contract.additionRpPath) addFileToZip(contract.additionRpPath, getZipDest('6B-RP ADICION', contract.additionRpPath));
+            if (contract.additionDocumentPath) addFileToZip(contract.additionDocumentPath, getZipDest('7B-MODIFICATORIO ADICION', contract.additionDocumentPath));
+
+            if (contract.rutPath) addFileToZip(contract.rutPath, getZipDest('8-RUT', contract.rutPath));
+            if (contract.bankCertificatePath) addFileToZip(contract.bankCertificatePath, getZipDest('9-CERTIFICADO DE CUENTA BANCARIA', contract.bankCertificatePath));
+
+            const ssPath = billingPeriod.securitySocialPath || contract.securitySocialPath;
+            if (ssPath) addFileToZip(ssPath, getZipDest('10-PLANILLA DE SEGURIDAD SOCIAL', ssPath));
         }
 
-        // 4. Copiar evidencias por actividad en subcarpetas estructuradas
+        // 3. Copiar evidencias por actividad en subcarpetas estructuradas (ej: 2.2.1, 2.2.2)
         if (billingPeriod.activities && billingPeriod.activities.length > 0) {
             billingPeriod.activities.forEach((act) => {
-                // Crear carpeta para la actividad (ej: '2.2.1')
                 const actFolderCode = act.obligationCode || 'Actividad';
-                const actFolderPath = path.join(tempDirPath, actFolderCode);
                 
                 if (act.evidences && act.evidences.length > 0) {
-                    if (!fs.existsSync(actFolderPath)) {
-                        fs.mkdirSync(actFolderPath, { recursive: true });
-                    }
-                    
                     act.evidences.forEach((evidence, index) => {
-                        if (evidence.path && fs.existsSync(evidence.path)) {
-                            // Mantener extensión original
-                            const ext = path.extname(evidence.filename || evidence.path) || '.jpg';
-                            const destFileName = `Evidencia_${index + 1}${ext}`;
-                            fs.copyFileSync(evidence.path, path.join(actFolderPath, destFileName));
+                        const evPath = evidence.path;
+                        if (evPath) {
+                            const ext = path.extname(evidence.filename || evPath) || '.jpg';
+                            const destFileName = `${actFolderCode}/Evidencia_${index + 1}${ext}`;
+                            addFileToZip(evPath, destFileName);
                         }
                     });
                 }
             });
         }
 
-        // 5. Comprimir todo usando PowerShell Compress-Archive en Windows
-        // Eliminamos el archivo zip si ya existe para evitar errores
-        if (fs.existsSync(zipPath)) {
-            fs.unlinkSync(zipPath);
-        }
+        // 4. Generar archivo comprimido .zip en memoria y escribir a disco
+        const zipBuffer = zip.generate({
+            type: 'nodebuffer',
+            compression: 'DEFLATE',
+            compressionOptions: { level: 6 }
+        });
 
-        // Comando PowerShell de compresión nativo y robusto
-        const cmd = `powershell -Command "Compress-Archive -Path '${tempDirPath}\\*' -DestinationPath '${zipPath}' -Force"`;
-        execSync(cmd, { stdio: 'inherit' });
-
+        fs.writeFileSync(zipPath, zipBuffer);
         console.log(`✅ Archivo comprimido creado con éxito en: ${zipPath}`);
         return zipPath;
 
     } catch (error) {
-        console.error('❌ Error al comprimir el paquete de cobro:', error.message);
+        console.error('❌ Error al comprimir el paquete de cobro con PizZip:', error.message);
         throw new Error('No se pudo generar el archivo comprimido con los soportes');
-    } finally {
-        // 6. Limpieza: Eliminar carpeta temporal
-        try {
-            if (fs.existsSync(tempDirPath)) {
-                fs.rmSync(tempDirPath, { recursive: true, force: true });
-            }
-        } catch (cleanupError) {
-            console.warn('⚠️ No se pudo eliminar la carpeta temporal:', cleanupError.message);
-        }
     }
 };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Users, 
@@ -19,17 +20,22 @@ import {
     DollarSign,
     Layers,
     FileText,
-    Sparkles
+    Sparkles,
+    Trash2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const ContractorsList = () => {
     const navigate = useNavigate();
+    const { user: currentUser } = useAuth();
     const [contractors, setContractors] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [filterOption, setFilterOption] = useState('all'); // all | with_cedula | without_contract | telegram
     const [selectedContractor, setSelectedContractor] = useState(null);
+    const [userToDelete, setUserToDelete] = useState(null);
+    const [deleting, setDeleting] = useState(false);
+    const [feedback, setFeedback] = useState(null);
 
     useEffect(() => {
         fetchContractors();
@@ -47,8 +53,38 @@ const ContractorsList = () => {
         }
     };
 
-    // Filter and search
+    const handleDeleteClick = (c, e) => {
+        if (e) e.stopPropagation();
+        setUserToDelete(c);
+    };
+
+    const confirmDeleteUser = async () => {
+        if (!userToDelete) return;
+        setDeleting(true);
+        try {
+            const { data } = await api.delete(`/admin/users/${userToDelete._id}`);
+            setFeedback({ type: 'success', message: data.message || 'Usuario eliminado con éxito' });
+            setUserToDelete(null);
+            if (selectedContractor && selectedContractor._id === userToDelete._id) {
+                setSelectedContractor(null);
+            }
+            await fetchContractors();
+        } catch (error) {
+            console.error('Error al eliminar usuario:', error);
+            setFeedback({ 
+                type: 'error', 
+                message: error.response?.data?.message || 'Error al eliminar el usuario del sistema' 
+            });
+        } finally {
+            setDeleting(false);
+            setTimeout(() => setFeedback(null), 5000);
+        }
+    };
+
+    // Filter and search (strictly excludes current administrator and any admin accounts)
     const filteredContractors = contractors.filter(c => {
+        if (c.role === 'admin' || c._id === currentUser?._id) return false;
+
         const matchesSearch = 
             (c.cedula || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             (c.fullName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -64,11 +100,12 @@ const ContractorsList = () => {
         return true;
     });
 
-    // KPI stats
-    const totalCount = contractors.length;
-    const withCedulaCount = contractors.filter(c => c.hasContract && c.cedula && !c.cedula.includes('Sin')).length;
-    const telegramCount = contractors.filter(c => c.telegramLinked).length;
-    const pendingPeriodsCount = contractors.reduce((acc, c) => acc + (c.periodsPending || 0), 0);
+    // KPI stats (excluding admin)
+    const nonAdminContractors = contractors.filter(c => c.role !== 'admin' && c._id !== currentUser?._id);
+    const totalCount = nonAdminContractors.length;
+    const withCedulaCount = nonAdminContractors.filter(c => c.hasContract && c.cedula && !c.cedula.includes('Sin')).length;
+    const telegramCount = nonAdminContractors.filter(c => c.telegramLinked).length;
+    const pendingPeriodsCount = nonAdminContractors.reduce((acc, c) => acc + (c.periodsPending || 0), 0);
 
     const formatCurrency = (val) => {
         if (!val) return '$ 0';
@@ -102,6 +139,28 @@ const ContractorsList = () => {
                     <ArrowLeft size={16} />
                     Volver al Panel
                 </button>
+
+                {/* Feedback alert */}
+                {feedback && (
+                    <motion.div 
+                        initial={{ opacity: 0, y: -10 }} 
+                        animate={{ opacity: 1, y: 0 }}
+                        style={{
+                            padding: '1rem 1.25rem',
+                            borderRadius: 'var(--radius-md)',
+                            marginBottom: '1.5rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.75rem',
+                            background: feedback.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                            border: `1px solid ${feedback.type === 'success' ? 'var(--success)' : 'var(--error)'}`,
+                            color: feedback.type === 'success' ? 'var(--success)' : 'var(--error)'
+                        }}
+                    >
+                        {feedback.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                        <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>{feedback.message}</span>
+                    </motion.div>
+                )}
 
                 {/* Header */}
                 <header style={{ marginBottom: '2rem' }}>
@@ -343,24 +402,65 @@ const ContractorsList = () => {
 
                                                 {/* Actions */}
                                                 <td style={{ padding: '1rem', textAlign: 'center' }}>
-                                                    <button 
-                                                        onClick={() => setSelectedContractor(c)}
-                                                        className="btn"
-                                                        style={{ 
-                                                            padding: '0.35rem 0.75rem', 
-                                                            fontSize: '0.8rem', 
-                                                            display: 'inline-flex', 
-                                                            alignItems: 'center', 
-                                                            gap: '0.35rem',
-                                                            background: 'rgba(59, 130, 246, 0.1)',
-                                                            color: 'var(--primary)',
-                                                            border: '1px solid rgba(59, 130, 246, 0.25)',
-                                                            borderRadius: 'var(--radius-md)',
-                                                            cursor: 'pointer'
-                                                        }}
-                                                    >
-                                                        <Eye size={14} /> Detalle
-                                                    </button>
+                                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'center' }}>
+                                                            <button 
+                                                                onClick={() => setSelectedContractor(c)}
+                                                                className="btn"
+                                                                title="Ver ficha detallada"
+                                                                style={{ 
+                                                                    padding: '0.35rem 0.65rem', 
+                                                                    fontSize: '0.78rem', 
+                                                                    display: 'inline-flex', 
+                                                                    alignItems: 'center', 
+                                                                    gap: '0.3rem',
+                                                                    background: 'rgba(59, 130, 246, 0.1)',
+                                                                    color: 'var(--primary)',
+                                                                    border: '1px solid rgba(59, 130, 246, 0.25)',
+                                                                    borderRadius: 'var(--radius-md)',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                            >
+                                                                <Eye size={13} /> Detalle
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => navigate(`/admin/documents?userId=${c._id}`)}
+                                                                className="btn"
+                                                                title="Ver y gestionar archivos del contratista"
+                                                                style={{ 
+                                                                    padding: '0.35rem 0.65rem', 
+                                                                    fontSize: '0.78rem', 
+                                                                    display: 'inline-flex', 
+                                                                    alignItems: 'center', 
+                                                                    gap: '0.3rem',
+                                                                    background: 'rgba(168, 85, 247, 0.1)',
+                                                                    color: '#a855f7',
+                                                                    border: '1px solid rgba(168, 85, 247, 0.25)',
+                                                                    borderRadius: 'var(--radius-md)',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                            >
+                                                                <Layers size={13} /> Archivos
+                                                            </button>
+                                                        <button 
+                                                            onClick={(e) => handleDeleteClick(c, e)}
+                                                            className="btn"
+                                                            title="Eliminar usuario del sistema"
+                                                            style={{ 
+                                                                padding: '0.35rem 0.65rem', 
+                                                                fontSize: '0.78rem', 
+                                                                display: 'inline-flex', 
+                                                                alignItems: 'center', 
+                                                                gap: '0.3rem',
+                                                                background: 'rgba(239, 68, 68, 0.1)',
+                                                                color: 'var(--error)',
+                                                                border: '1px solid rgba(239, 68, 68, 0.25)',
+                                                                borderRadius: 'var(--radius-md)',
+                                                                cursor: 'pointer'
+                                                            }}
+                                                        >
+                                                            <Trash2 size={13} /> Eliminar
+                                                        </button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         );
@@ -498,13 +598,145 @@ const ContractorsList = () => {
                                     </span>
                                 </div>
 
-                                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                                     <button 
-                                        className="btn btn-primary" 
-                                        onClick={() => setSelectedContractor(null)}
-                                        style={{ padding: '0.5rem 1.5rem' }}
+                                        className="btn" 
+                                        onClick={() => {
+                                            const toDelete = selectedContractor;
+                                            setSelectedContractor(null);
+                                            handleDeleteClick(toDelete);
+                                        }}
+                                        style={{ 
+                                            background: 'rgba(239, 68, 68, 0.12)', 
+                                            color: 'var(--error)', 
+                                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                                            padding: '0.5rem 1.25rem',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.4rem',
+                                            fontSize: '0.85rem',
+                                            cursor: 'pointer',
+                                            borderRadius: 'var(--radius-md)'
+                                        }}
                                     >
-                                        Cerrar Ficha
+                                        <Trash2 size={15} /> Eliminar Usuario del Sistema
+                                    </button>
+                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                        <button 
+                                            className="btn" 
+                                            onClick={() => {
+                                                const userId = selectedContractor._id;
+                                                setSelectedContractor(null);
+                                                navigate(`/admin/documents?userId=${userId}`);
+                                            }}
+                                            style={{ 
+                                                background: 'rgba(168, 85, 247, 0.12)', 
+                                                color: '#a855f7', 
+                                                border: '1px solid rgba(168, 85, 247, 0.3)',
+                                                padding: '0.5rem 1.25rem',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                fontSize: '0.85rem',
+                                                cursor: 'pointer',
+                                                borderRadius: 'var(--radius-md)'
+                                            }}
+                                        >
+                                            <Layers size={15} /> Ver Documentos y ZIPs
+                                        </button>
+                                        <button 
+                                            className="btn btn-primary" 
+                                            onClick={() => setSelectedContractor(null)}
+                                            style={{ padding: '0.5rem 1.5rem' }}
+                                        >
+                                            Cerrar Ficha
+                                        </button>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        </div>
+                    )}
+                </AnimatePresence>
+
+                {/* Delete Confirmation Modal */}
+                <AnimatePresence>
+                    {userToDelete && (
+                        <div style={{
+                            position: 'fixed',
+                            inset: 0,
+                            background: 'rgba(0,0,0,0.75)',
+                            backdropFilter: 'blur(5px)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 1100,
+                            padding: '1rem'
+                        }}>
+                            <motion.div 
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                                className="glass"
+                                style={{
+                                    width: '100%',
+                                    maxWidth: '480px',
+                                    borderRadius: 'var(--radius-lg)',
+                                    padding: '2rem',
+                                    boxShadow: '0 25px 50px -12px rgba(0,0,0,0.6)',
+                                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                                    textAlign: 'center'
+                                }}
+                            >
+                                <div style={{
+                                    width: '56px',
+                                    height: '56px',
+                                    borderRadius: '50%',
+                                    background: 'rgba(239, 68, 68, 0.15)',
+                                    color: 'var(--error)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    margin: '0 auto 1.25rem'
+                                }}>
+                                    <Trash2 size={28} />
+                                </div>
+
+                                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: 'var(--text-main)' }}>
+                                    ¿Eliminar Contratista del Sistema?
+                                </h3>
+
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
+                                    Estás a punto de eliminar al usuario <strong style={{ color: 'var(--text-main)' }}>{userToDelete.contractorName || userToDelete.fullName}</strong> ({userToDelete.email}).
+                                    <br />
+                                    <span style={{ color: 'var(--error)', fontSize: '0.8rem', display: 'block', marginTop: '0.5rem', fontWeight: 500 }}>
+                                        ⚠️ Esta acción eliminará permanentemente su cuenta, contrato registrado, actas y evidencias. No se puede deshacer.
+                                    </span>
+                                </p>
+
+                                <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+                                    <button 
+                                        className="btn" 
+                                        onClick={() => setUserToDelete(null)}
+                                        disabled={deleting}
+                                        style={{ border: '1px solid var(--border)', padding: '0.6rem 1.25rem' }}
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button 
+                                        className="btn" 
+                                        onClick={confirmDeleteUser}
+                                        disabled={deleting}
+                                        style={{ 
+                                            background: 'var(--error)', 
+                                            color: 'white', 
+                                            border: 'none', 
+                                            padding: '0.6rem 1.25rem',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem'
+                                        }}
+                                    >
+                                        {deleting ? 'Eliminando...' : 'Sí, Eliminar Usuario'}
                                     </button>
                                 </div>
                             </motion.div>
