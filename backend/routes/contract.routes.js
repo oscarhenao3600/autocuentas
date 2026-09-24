@@ -9,7 +9,9 @@ const {
     uploadAdditionContract, 
     uploadAdditionRp, 
     uploadActaInicio,
-    getEvidenceReminderStatus
+    getEvidenceReminderStatus,
+    unlockBankCertificate,
+    unlockRut
 } = require('../controllers/contract.controller');
 const { protect } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
@@ -25,6 +27,12 @@ router.post('/upload-attachments', protect, upload.fields([
     { name: 'bankCertificate', maxCount: 1 },
     { name: 'securitySocial', maxCount: 1 }
 ]), uploadAttachments);
+
+// Route to unlock bank certificate with password
+router.post('/unlock-bank-certificate', protect, unlockBankCertificate);
+
+// Route to unlock RUT with password
+router.post('/unlock-rut', protect, unlockRut);
 
 // Upload and process Acta de Inicio with Gemini AI
 router.post('/upload-acta-inicio', protect, upload.single('actaInicioFile'), uploadActaInicio);

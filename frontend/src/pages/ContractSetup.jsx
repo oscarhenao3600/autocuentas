@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
-import { filterSpecificObligations } from '../utils/period.utils';
+import { filterSpecificObligations, getContractDurationText } from '../utils/period.utils';
 import { motion } from 'framer-motion';
-import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info, ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const ContractSetup = () => {
@@ -17,6 +17,13 @@ const ContractSetup = () => {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [extractingBank, setExtractingBank] = useState(false);
+    const [extractingRut, setExtractingRut] = useState(false);
+    const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+    const [passwordDocType, setPasswordDocType] = useState('bankCertificate'); // 'bankCertificate' or 'rut'
+    const [docPassword, setDocPassword] = useState('');
+    const [passwordError, setPasswordError] = useState('');
+    const [unlockingDoc, setUnlockingDoc] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
 
     useEffect(() => {
         fetchContract();
@@ -119,7 +126,10 @@ const ContractSetup = () => {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
             setContract(data.data);
-            setSuccess(`Acta de Inicio procesada con éxito por la IA. Fecha oficial de inicio: ${data.data.startDate || 'N/A'}`);
+            const startStr = data.data.startDate ? data.data.startDate.split('T')[0] : 'N/A';
+            const endStr = data.data.endDate ? ` | Fin: ${data.data.endDate.split('T')[0]}` : '';
+            const durationStr = ` | Plazo: ${getContractDurationText(data.data)}`;
+            setSuccess(`Acta de Inicio procesada con éxito por la IA. Inicio: ${startStr}${endStr}${durationStr}`);
         } catch (err) {
             setError('Error al procesar el Acta de Inicio: ' + (err.response?.data?.message || err.message));
         } finally {
@@ -168,7 +178,7 @@ const ContractSetup = () => {
         }
     };
 
-        const handleAttachmentUpload = async (e, type) => {
+    const handleAttachmentUpload = async (e, type) => {
         const file = e.target.files[0];
         if (!file) return;
 
@@ -177,6 +187,8 @@ const ContractSetup = () => {
 
         if (type === 'bankCertificate') {
             setExtractingBank(true);
+        } else if (type === 'rut') {
+            setExtractingRut(true);
         }
         setError('');
         setSuccess('');
@@ -185,19 +197,67 @@ const ContractSetup = () => {
             const { data } = await api.post('/contracts/upload-attachments', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
-            setContract(data.data);
+            if (data.data) {
+                setContract(data.data);
+            }
+
+            if (data.requiresPassword) {
+                setPasswordDocType(data.docType || type);
+                setPasswordModalOpen(true);
+                setDocPassword('');
+                setPasswordError(data.message || 'El documento está protegido con contraseña.');
+                return;
+            }
+
             if (type === 'bankCertificate') {
-                setSuccess('Certificación Bancaria subida y procesada por IA con éxito. Banco, Cuenta y Tipo de Cuenta autocompletados.');
+                setSuccess(data.message || 'Certificación Bancaria subida y procesada por IA con éxito. Banco, Cuenta y Tipo de Cuenta autocompletados.');
+            } else if (type === 'rut') {
+                setSuccess(data.message || 'RUT subido y procesado por IA con éxito. Datos fiscales y dirección autocompletados.');
             } else {
                 setSuccess('Anexo subido correctamente.');
             }
-            setTimeout(() => setSuccess(''), 5000);
+            setTimeout(() => setSuccess(''), 6000);
         } catch (err) {
             setError('Error al subir anexo: ' + (err.response?.data?.message || err.message));
         } finally {
             if (type === 'bankCertificate') {
                 setExtractingBank(false);
+            } else if (type === 'rut') {
+                setExtractingRut(false);
             }
+        }
+    };
+
+    const handleUnlockDocSubmit = async (e) => {
+        if (e) e.preventDefault();
+        if (!docPassword.trim()) {
+            setPasswordError('Por favor ingresa la contraseña del documento.');
+            return;
+        }
+
+        setUnlockingDoc(true);
+        setPasswordError('');
+
+        const endpoint = passwordDocType === 'rut'
+            ? '/contracts/unlock-rut'
+            : '/contracts/unlock-bank-certificate';
+
+        try {
+            const { data } = await api.post(endpoint, {
+                password: docPassword.trim()
+            });
+
+            if (data.data) {
+                setContract(data.data);
+            }
+            setPasswordModalOpen(false);
+            setDocPassword('');
+            setSuccess(data.message || '¡Documento desbloqueado y procesado por IA con éxito!');
+            setTimeout(() => setSuccess(''), 6000);
+        } catch (err) {
+            setPasswordError(err.response?.data?.message || 'Error al desbloquear el documento. Verifica la contraseña.');
+        } finally {
+            setUnlockingDoc(false);
         }
     };
 
@@ -287,6 +347,12 @@ const ContractSetup = () => {
                                 <div className="form-group">
                                     <label className="label">Fecha Fin Contrato</label>
                                     <input className="input" type="date" value={contract.endDate ? contract.endDate.split('T')[0] : ''} onChange={(e) => setContract({...contract, endDate: e.target.value})} />
+                                </div>
+                                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <div style={{ padding: '0.6rem 0.9rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.85rem' }}>
+                                        <span><strong>⏱️ Plazo / Duración calculada:</strong> {getContractDurationText(contract)}</span>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Modalidad: {contract.periodType === '30_dias' ? 'Por días calendario (30 días)' : 'Mes cumplido'}</span>
+                                    </div>
                                 </div>
                                 <div className="form-group">
                                     <label className="label">Valor Mensual ($)</label>
@@ -574,7 +640,9 @@ const ContractSetup = () => {
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
                                     <p style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.25rem' }}>Acta de Inicio / SECOP II</p>
                                     <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-                                        {contract.startDate ? `Inicio: ${contract.startDate.split('T')[0]}` : 'Define fecha de inicio'}
+                                        {contract.startDate 
+                                            ? `Inicio: ${contract.startDate.split('T')[0]}${contract.endDate ? ` | Fin: ${contract.endDate.split('T')[0]}` : ''} • ${getContractDurationText(contract)}` 
+                                            : 'Define fecha de inicio y fin'}
                                     </p>
                                     <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: uploadingActa ? 0.7 : 1 }}>
                                         {uploadingActa ? '⏳ Procesando...' : contract.actaInicioPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
@@ -598,12 +666,40 @@ const ContractSetup = () => {
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                                     <p style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.25rem' }}>RUT Actualizado</p>
                                     <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-                                        {contract.rutPath ? 'Cargado en sistema' : 'Datos fiscales y DIAN'}
+                                        {contract.contractorAddress ? `${contract.contractorAddress} (${contract.idCity || ''})` : contract.rutPath ? 'Cargado en sistema' : 'Datos fiscales y DIAN'}
                                     </p>
-                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
-                                        {contract.rutPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
-                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'rut')} accept=".pdf" />
-                                    </label>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+                                        <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: extractingRut ? 0.7 : 1 }}>
+                                            {extractingRut ? '⏳ Extrayendo...' : contract.rutPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                            <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'rut')} accept=".pdf,.jpg,.jpeg,.png" disabled={extractingRut} />
+                                        </label>
+                                        {contract.rutPath && (!contract.contractorAddress || contract.contractorAddress === 'N/A') && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setPasswordDocType('rut');
+                                                    setPasswordModalOpen(true);
+                                                    setPasswordError('');
+                                                    setDocPassword('');
+                                                }}
+                                                className="btn"
+                                                style={{
+                                                    fontSize: '0.7rem',
+                                                    border: '1px solid #f59e0b',
+                                                    color: '#f59e0b',
+                                                    background: 'rgba(245, 158, 11, 0.1)',
+                                                    padding: '0.25rem 0.5rem',
+                                                    borderRadius: 'var(--radius-sm)',
+                                                    cursor: 'pointer',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px'
+                                                }}
+                                            >
+                                                <Lock size={12} /> Desbloquear con Clave
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
 
                                 {/* Certificado Bancario */}
@@ -612,10 +708,38 @@ const ContractSetup = () => {
                                     <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
                                         {contract.bankName ? `${contract.bankName} (${contract.accountNumber || ''})` : 'Cuenta y banco'}
                                     </p>
-                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: extractingBank ? 0.7 : 1 }}>
-                                        {extractingBank ? '⏳ Extrayendo...' : contract.bankCertificatePath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
-                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'bankCertificate')} accept=".pdf,.jpg,.jpeg,.png" disabled={extractingBank} />
-                                    </label>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+                                        <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: extractingBank ? 0.7 : 1 }}>
+                                            {extractingBank ? '⏳ Extrayendo...' : contract.bankCertificatePath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                            <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'bankCertificate')} accept=".pdf,.jpg,.jpeg,.png" disabled={extractingBank} />
+                                        </label>
+                                        {contract.bankCertificatePath && (!contract.bankName || !contract.accountNumber) && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setPasswordDocType('bankCertificate');
+                                                    setPasswordModalOpen(true);
+                                                    setPasswordError('');
+                                                    setDocPassword('');
+                                                }}
+                                                className="btn"
+                                                style={{
+                                                    fontSize: '0.7rem',
+                                                    border: '1px solid #f59e0b',
+                                                    color: '#f59e0b',
+                                                    background: 'rgba(245, 158, 11, 0.1)',
+                                                    padding: '0.25rem 0.5rem',
+                                                    borderRadius: 'var(--radius-sm)',
+                                                    cursor: 'pointer',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px'
+                                                }}
+                                            >
+                                                <Lock size={12} /> Desbloquear con Clave
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
 
                                 {/* Seguridad Social */}
@@ -646,6 +770,183 @@ const ContractSetup = () => {
                             </label>
                         </div>
                     </form>
+                )}
+
+                {/* Modal para solicitar contraseña del certificado bancario */}
+                {passwordModalOpen && (
+                    <div 
+                        style={{
+                            position: 'fixed',
+                            inset: 0,
+                            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                            backdropFilter: 'blur(5px)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 9999,
+                            padding: '1rem'
+                        }}
+                    >
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="glass"
+                            style={{
+                                width: '100%',
+                                maxWidth: '460px',
+                                padding: '2rem',
+                                borderRadius: 'var(--radius-lg)',
+                                border: '1px solid rgba(245, 158, 11, 0.4)',
+                                background: '#181b26',
+                                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6)'
+                            }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <div style={{ 
+                                        width: '42px', 
+                                        height: '42px', 
+                                        borderRadius: '50%', 
+                                        background: 'rgba(245, 158, 11, 0.15)', 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        justifyContent: 'center',
+                                        border: '1px solid rgba(245, 158, 11, 0.3)'
+                                    }}>
+                                        <Lock size={22} color="#f59e0b" />
+                                    </div>
+                                    <div>
+                                        <h3 style={{ fontSize: '1.15rem', fontWeight: '700', color: 'var(--text-main)' }}>
+                                            {passwordDocType === 'rut' ? 'RUT Protegido con Contraseña' : 'Certificado Protegido con Contraseña'}
+                                        </h3>
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            Desbloqueo para extracción con IA
+                                        </p>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setPasswordModalOpen(false);
+                                        setPasswordError('');
+                                    }}
+                                    style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: 'var(--text-muted)',
+                                        cursor: 'pointer',
+                                        padding: '4px'
+                                    }}
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <p style={{ fontSize: '0.875rem', color: 'var(--text-main)', marginBottom: '1.25rem', lineHeight: '1.5' }}>
+                                Este documento ({passwordDocType === 'rut' ? 'RUT' : 'PDF bancario'}) tiene clave de seguridad. Intentamos abrirlo automáticamente con tu número de cédula, pero no coincidió. Por favor escribe la contraseña del documento para que la IA pueda procesarlo:
+                            </p>
+
+                            <form onSubmit={handleUnlockDocSubmit}>
+                                <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                                    <label className="label" style={{ fontSize: '0.8rem', fontWeight: '600', marginBottom: '0.5rem', display: 'block' }}>
+                                        {passwordDocType === 'rut' ? 'Contraseña del RUT' : 'Contraseña del Certificado'}
+                                    </label>
+                                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                        <input 
+                                            type={showPassword ? 'text' : 'password'}
+                                            className="input"
+                                            placeholder={passwordDocType === 'rut' ? "Ingresa la contraseña del RUT" : "Ingresa la contraseña del PDF"}
+                                            value={docPassword}
+                                            onChange={(e) => setDocPassword(e.target.value)}
+                                            autoFocus
+                                            style={{ paddingRight: '2.5rem', width: '100%' }}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            style={{
+                                                position: 'absolute',
+                                                right: '10px',
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: 'var(--text-muted)',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center'
+                                            }}
+                                            tabIndex={-1}
+                                        >
+                                            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {passwordError && (
+                                    <div style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        gap: '0.5rem', 
+                                        color: '#ef4444', 
+                                        fontSize: '0.8rem', 
+                                        marginBottom: '1rem',
+                                        padding: '0.5rem 0.75rem',
+                                        background: 'rgba(239, 68, 68, 0.1)',
+                                        borderRadius: 'var(--radius-sm)',
+                                        border: '1px solid rgba(239, 68, 68, 0.2)'
+                                    }}>
+                                        <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                                        <span>{passwordError}</span>
+                                    </div>
+                                )}
+
+                                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setPasswordModalOpen(false);
+                                            setPasswordError('');
+                                        }}
+                                        className="btn"
+                                        disabled={unlockingDoc}
+                                        style={{
+                                            background: 'transparent',
+                                            border: '1px solid var(--border)',
+                                            color: 'var(--text-muted)',
+                                            padding: '0.5rem 1rem',
+                                            fontSize: '0.85rem'
+                                        }}
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        className="btn btn-primary"
+                                        disabled={unlockingDoc || !docPassword.trim()}
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            padding: '0.5rem 1.25rem',
+                                            fontSize: '0.85rem'
+                                        }}
+                                    >
+                                        {unlockingDoc ? (
+                                            <>
+                                                <Loader2 size={16} className="animate-spin" />
+                                                Desbloqueando y Procesando...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Lock size={16} />
+                                                Desbloquear con IA
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                            </form>
+                        </motion.div>
+                    </div>
                 )}
             </motion.div>
         </div>

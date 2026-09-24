@@ -1,6 +1,6 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
-const pdf = require("pdf-parse");
+const { parsePdfText, unlockPdfWithCandidates } = require("../utils/pdf.utils");
 require("dotenv").config();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -29,13 +29,12 @@ exports.extractContractData = async (filePath) => {
 
         if (filePath.endsWith('.pdf')) {
             try {
-                const data = await pdf(dataBuffer);
-                text = data.text;
+                text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 150) {
                     useMultimodal = true;
                 }
             } catch (err) {
-                console.warn("pdf-parse falló, usando Gemini multimodal OCR:", err.message);
+                console.warn("Extracción de texto PDF falló, usando Gemini multimodal OCR:", err.message);
                 useMultimodal = true;
             }
         } else {
@@ -106,13 +105,12 @@ exports.extractRpData = async (filePath) => {
 
         if (filePath.endsWith('.pdf')) {
             try {
-                const data = await pdf(dataBuffer);
-                text = data.text;
+                text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 100) {
                     useMultimodal = true;
                 }
             } catch (err) {
-                console.warn("pdf-parse falló, usando Gemini multimodal OCR para RP:", err.message);
+                console.warn("Extracción de texto RP falló, usando Gemini multimodal OCR:", err.message);
                 useMultimodal = true;
             }
         } else {
@@ -161,13 +159,12 @@ exports.extractAdditionContractData = async (filePath) => {
 
         if (filePath.endsWith('.pdf')) {
             try {
-                const data = await pdf(dataBuffer);
-                text = data.text;
+                text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 150) {
                     useMultimodal = true;
                 }
             } catch (err) {
-                console.warn("pdf-parse falló en modificatorio, usando Gemini multimodal OCR:", err.message);
+                console.warn("Extracción de texto modificatorio falló, usando Gemini multimodal OCR:", err.message);
                 useMultimodal = true;
             }
         } else {
@@ -215,21 +212,34 @@ exports.extractAdditionContractData = async (filePath) => {
     }
 };
 
-exports.extractBankCertificateData = async (filePath) => {
+exports.extractBankCertificateData = async (filePath, options = {}) => {
     try {
         const dataBuffer = fs.readFileSync(filePath);
         let text = "";
         let useMultimodal = false;
+        let unlockedWithCedula = false;
+        let unlockedWithPassword = false;
+        let usedPassword = null;
 
         if (filePath.endsWith('.pdf')) {
-            try {
-                const data = await pdf(dataBuffer);
-                text = data.text;
-                if (!text || text.trim().length < 50) {
-                    useMultimodal = true;
+            // Check encryption and unlock with candidate passwords (e.g. user cédula)
+            const unlockResult = await unlockPdfWithCandidates(dataBuffer, {
+                password: options.password,
+                candidatePasswords: options.candidatePasswords,
+                targetSavePath: filePath
+            });
+
+            text = unlockResult.text;
+            usedPassword = unlockResult.usedPassword;
+            if (unlockResult.unlocked) {
+                unlockedWithPassword = true;
+                // If the used password matches any of the candidate passwords (cédula)
+                if (options.candidatePasswords && options.candidatePasswords.some(c => c && String(c).trim() === String(usedPassword))) {
+                    unlockedWithCedula = true;
                 }
-            } catch (err) {
-                console.warn("pdf-parse falló en certificado bancario, usando Gemini multimodal OCR:", err.message);
+            }
+
+            if (!text || text.trim().length < 50) {
                 useMultimodal = true;
             }
         } else {
@@ -251,10 +261,12 @@ exports.extractBankCertificateData = async (filePath) => {
         const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
         if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
             console.log("Procesando certificado bancario escaneado o imagen. Usando modo multimodal de Gemini...");
+            // Re-read buffer in case unlockAndSaveCleanPdf overwrote it with clean unencrypted version
+            const freshBuffer = fs.readFileSync(filePath);
             const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
             const filePart = {
                 inlineData: {
-                    data: dataBuffer.toString("base64"),
+                    data: freshBuffer.toString("base64"),
                     mimeType: mimeType
                 }
             };
@@ -266,11 +278,22 @@ exports.extractBankCertificateData = async (filePath) => {
         const response = await result.response;
         const jsonText = response.text().replace(/```json|```/g, "").trim();
         
-        return JSON.parse(jsonText);
+        const extracted = JSON.parse(jsonText);
+        return {
+            ...extracted,
+            unlockedWithCedula,
+            unlockedWithPassword,
+            usedPassword
+        };
     } catch (error) {
+        if (error.code === 'PASSWORD_REQUIRED') {
+            throw error;
+        }
         console.error("Error en extractBankCertificateData:", error);
         if (error.message && (error.message.includes('password') || error.message.includes('Password') || error.message.includes('no pages'))) {
-            throw new Error("El certificado bancario parece tener clave o estar protegido. Por favor sube una imagen o un PDF sin clave.");
+            const passErr = new Error("El certificado bancario parece tener clave o estar protegido.");
+            passErr.code = "PASSWORD_REQUIRED";
+            throw passErr;
         }
         throw new Error("No se pudo procesar el certificado bancario con IA");
     }
@@ -284,13 +307,12 @@ exports.extractSecuritySocialData = async (filePath) => {
 
         if (filePath.endsWith('.pdf')) {
             try {
-                const data = await pdf(dataBuffer);
-                text = data.text;
+                text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 150) {
                     useMultimodal = true;
                 }
             } catch (err) {
-                console.warn("pdf-parse falló en planilla SS, usando Gemini multimodal OCR:", err.message);
+                console.warn("Extracción de texto planilla SS falló, usando Gemini multimodal OCR:", err.message);
                 useMultimodal = true;
             }
         } else {
@@ -345,13 +367,12 @@ exports.extractActaInicioData = async (filePath) => {
 
         if (filePath.endsWith('.pdf')) {
             try {
-                const data = await pdf(dataBuffer);
-                text = data.text;
+                text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 80) {
                     useMultimodal = true;
                 }
             } catch (err) {
-                console.warn("pdf-parse falló en acta de inicio, usando Gemini multimodal OCR:", err.message);
+                console.warn("Extracción de texto acta de inicio falló, usando Gemini multimodal OCR:", err.message);
                 useMultimodal = true;
             }
         } else {
@@ -394,21 +415,34 @@ exports.extractActaInicioData = async (filePath) => {
     }
 };
 
-exports.extractRutData = async (filePath) => {
+exports.extractRutData = async (filePath, options = {}) => {
     try {
         const dataBuffer = fs.readFileSync(filePath);
         let text = "";
         let useMultimodal = false;
+        let unlockedWithCedula = false;
+        let unlockedWithPassword = false;
+        let usedPassword = null;
 
         if (filePath.endsWith('.pdf')) {
-            try {
-                const data = await pdf(dataBuffer);
-                text = data.text;
-                if (!text || text.trim().length < 80) {
-                    useMultimodal = true;
+            // Check encryption and unlock with candidate passwords (e.g. user cédula)
+            const unlockResult = await unlockPdfWithCandidates(dataBuffer, {
+                password: options.password,
+                candidatePasswords: options.candidatePasswords,
+                targetSavePath: filePath
+            });
+
+            text = unlockResult.text;
+            usedPassword = unlockResult.usedPassword;
+            if (unlockResult.unlocked) {
+                unlockedWithPassword = true;
+                // If the used password matches any of the candidate passwords (cédula)
+                if (options.candidatePasswords && options.candidatePasswords.some(c => c && String(c).trim() === String(usedPassword))) {
+                    unlockedWithCedula = true;
                 }
-            } catch (err) {
-                console.warn("pdf-parse falló en RUT, usando Gemini multimodal OCR:", err.message);
+            }
+
+            if (!text || text.trim().length < 80) {
                 useMultimodal = true;
             }
         } else {
@@ -432,10 +466,12 @@ exports.extractRutData = async (filePath) => {
         let result;
         const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
         if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
+            console.log("Procesando RUT escaneado o imagen. Usando modo multimodal de Gemini...");
+            const freshBuffer = fs.readFileSync(filePath);
             const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
             const filePart = {
                 inlineData: {
-                    data: dataBuffer.toString("base64"),
+                    data: freshBuffer.toString("base64"),
                     mimeType: mimeType
                 }
             };
@@ -446,9 +482,23 @@ exports.extractRutData = async (filePath) => {
 
         const response = await result.response;
         const jsonText = response.text().replace(/```json|```/g, "").trim();
-        return JSON.parse(jsonText);
+        const extracted = JSON.parse(jsonText);
+        return {
+            ...extracted,
+            unlockedWithCedula,
+            unlockedWithPassword,
+            usedPassword
+        };
     } catch (error) {
+        if (error.code === 'PASSWORD_REQUIRED') {
+            throw error;
+        }
         console.error("Error en extractRutData:", error);
+        if (error.message && (error.message.includes('password') || error.message.includes('Password') || error.message.includes('no pages'))) {
+            const passErr = new Error("El RUT parece tener clave o estar protegido.");
+            passErr.code = "PASSWORD_REQUIRED";
+            throw passErr;
+        }
         throw new Error("No se pudo procesar el RUT con IA");
     }
 };

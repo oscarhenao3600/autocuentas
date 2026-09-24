@@ -9,9 +9,13 @@ require('dotenv').config();
 const app = express();
 
 // Security Middlewares
-app.use(helmet()); // Sets various HTTP headers for security
+app.use(helmet({
+    hsts: false,
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false
+}));
 app.use(cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173', // Vite default
+    origin: true,
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' })); // Limit body size to prevent DoS

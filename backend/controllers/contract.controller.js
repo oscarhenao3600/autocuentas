@@ -1,5 +1,6 @@
+const fs = require('fs');
 const Contract = require('../models/Contract');
-const { extractContractData, extractRpData, extractBankCertificateData, extractActaInicioData } = require('../services/gemini.service');
+const { extractContractData, extractRpData, extractBankCertificateData, extractActaInicioData, extractRutData } = require('../services/gemini.service');
 const { filterSpecificObligations } = require('../utils/period.utils');
 const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
@@ -59,14 +60,71 @@ exports.uploadAttachments = async (req, res) => {
 
         const updates = {};
         let bankExtracted = null;
+        let rutExtracted = null;
 
-        if (req.files.rut) updates.rutPath = req.files.rut[0].path;
+        // Gather candidate passwords: cédula from contract
+        const candidates = [];
+        if (contract.idNumber) {
+            candidates.push(contract.idNumber.trim());
+            const cleanCedula = contract.idNumber.replace(/\D/g, '');
+            if (cleanCedula && cleanCedula !== contract.idNumber.trim()) {
+                candidates.push(cleanCedula);
+            }
+        }
+
+        if (req.files.securitySocial) updates.securitySocialPath = req.files.securitySocial[0].path;
+
+        if (req.files.rut) {
+            const file = req.files.rut[0];
+            updates.rutPath = file.path;
+
+            try {
+                console.log("Procesando RUT con IA...");
+                rutExtracted = await extractRutData(file.path, {
+                    password: req.body.rutPassword,
+                    candidatePasswords: candidates
+                });
+
+                if (rutExtracted) {
+                    if (rutExtracted.contractorAddress) updates.contractorAddress = rutExtracted.contractorAddress;
+                    if (rutExtracted.idCity) updates.idCity = rutExtracted.idCity;
+                    if (typeof rutExtracted.isTaxFiler === 'boolean') updates.isTaxFiler = rutExtracted.isTaxFiler;
+                    if (rutExtracted.contractorPhone && !contract.contractorPhone) updates.contractorPhone = rutExtracted.contractorPhone;
+                    if (rutExtracted.contractorEmail && !contract.contractorEmail) updates.contractorEmail = rutExtracted.contractorEmail;
+                    console.log("Datos del RUT extraídos:", rutExtracted);
+                }
+            } catch (err) {
+                if (err.code === 'PASSWORD_REQUIRED') {
+                    Object.assign(contract, updates);
+                    await contract.save();
+
+                    return res.status(200).json({
+                        requiresPassword: true,
+                        docType: 'rut',
+                        invalidPassword: Boolean(req.body.rutPassword),
+                        message: req.body.rutPassword
+                            ? "La contraseña ingresada es incorrecta para el RUT."
+                            : (candidates.length > 0
+                                ? "El RUT está protegido con contraseña. Intentamos abrirlo automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarlo con la IA."
+                                : "El RUT está protegido con contraseña. Por favor ingresa la contraseña para procesarlo con la IA."),
+                        data: contract
+                    });
+                }
+                console.error("No se pudo extraer información del RUT:", err.message);
+            }
+        }
+
         if (req.files.bankCertificate) {
             const file = req.files.bankCertificate[0];
             updates.bankCertificatePath = file.path;
+
             try {
                 console.log("Procesando Certificado Bancario con IA...");
-                bankExtracted = await extractBankCertificateData(file.path);
+                bankExtracted = await extractBankCertificateData(file.path, {
+                    password: req.body.bankCertificatePassword,
+                    candidatePasswords: candidates
+                });
+
                 if (bankExtracted) {
                     if (bankExtracted.bankName) updates.bankName = bankExtracted.bankName;
                     if (bankExtracted.accountNumber) updates.accountNumber = bankExtracted.accountNumber;
@@ -74,22 +132,166 @@ exports.uploadAttachments = async (req, res) => {
                     console.log("Datos bancarios extraídos:", bankExtracted);
                 }
             } catch (err) {
+                if (err.code === 'PASSWORD_REQUIRED') {
+                    // Save uploaded attachment path so user can unlock it without re-uploading
+                    Object.assign(contract, updates);
+                    await contract.save();
+
+                    return res.status(200).json({
+                        requiresPassword: true,
+                        docType: 'bankCertificate',
+                        invalidPassword: Boolean(req.body.bankCertificatePassword),
+                        message: req.body.bankCertificatePassword
+                            ? "La contraseña ingresada es incorrecta para este documento."
+                            : (candidates.length > 0
+                                ? "El certificado bancario está protegido con contraseña. Intentamos abrirlo automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarlo con la IA."
+                                : "El certificado bancario está protegido con contraseña. Por favor ingresa la contraseña para procesarlo con la IA."),
+                        data: contract
+                    });
+                }
                 console.error("No se pudo extraer información del certificado bancario:", err.message);
             }
         }
-        if (req.files.securitySocial) updates.securitySocialPath = req.files.securitySocial[0].path;
 
         Object.assign(contract, updates);
         await contract.save();
 
+        let message = 'Anexos actualizados con éxito';
+        if (bankExtracted) {
+            if (bankExtracted.unlockedWithCedula) {
+                message = 'Anexos actualizados y certificado bancario desbloqueado automáticamente con tu cédula y procesado por la IA con éxito';
+            } else if (bankExtracted.unlockedWithPassword) {
+                message = 'Anexos actualizados y certificado bancario desbloqueado con la contraseña ingresada y procesado por la IA con éxito';
+            } else {
+                message = 'Anexos actualizados y certificado bancario procesado por la IA con éxito';
+            }
+        } else if (rutExtracted) {
+            if (rutExtracted.unlockedWithCedula) {
+                message = 'Anexos actualizados y RUT desbloqueado automáticamente con tu cédula y procesado por la IA con éxito';
+            } else if (rutExtracted.unlockedWithPassword) {
+                message = 'Anexos actualizados y RUT desbloqueado con la contraseña ingresada y procesado por la IA con éxito';
+            } else {
+                message = 'Anexos actualizados y RUT procesado por la IA con éxito';
+            }
+        }
+
         res.json({
-            message: bankExtracted 
-                ? 'Anexos actualizados y certificado bancario procesado por la IA con éxito' 
-                : 'Anexos actualizados con éxito',
-            data: contract
+            message,
+            data: contract,
+            extracted: bankExtracted || rutExtracted
         });
     } catch (error) {
         res.status(500).json({ message: 'Error al subir anexos', error: error.message });
+    }
+};
+
+exports.unlockBankCertificate = async (req, res) => {
+    try {
+        const { password } = req.body;
+        if (!password || !password.trim()) {
+            return res.status(400).json({ message: 'Por favor ingresa la contraseña del certificado bancario' });
+        }
+
+        const contract = await Contract.findOne({ user: req.user._id });
+        if (!contract || !contract.bankCertificatePath) {
+            return res.status(404).json({ message: 'No hay un certificado bancario cargado previamente' });
+        }
+
+        if (!fs.existsSync(contract.bankCertificatePath)) {
+            return res.status(404).json({ message: 'El archivo del certificado bancario no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        }
+
+        try {
+            console.log("Intentando desbloquear certificado bancario con contraseña ingresada...");
+            const bankExtracted = await extractBankCertificateData(contract.bankCertificatePath, {
+                password: password.trim(),
+                candidatePasswords: []
+            });
+
+            if (bankExtracted) {
+                if (bankExtracted.bankName) contract.bankName = bankExtracted.bankName;
+                if (bankExtracted.accountNumber) contract.accountNumber = bankExtracted.accountNumber;
+                if (bankExtracted.paymentMethod) contract.paymentMethod = bankExtracted.paymentMethod;
+                await contract.save();
+            }
+
+            return res.json({
+                success: true,
+                message: '¡Certificado bancario desbloqueado y procesado por IA con éxito! Datos bancarios actualizados.',
+                data: contract,
+                extracted: bankExtracted
+            });
+        } catch (err) {
+            if (err.code === 'PASSWORD_REQUIRED') {
+                return res.status(400).json({
+                    requiresPassword: true,
+                    docType: 'bankCertificate',
+                    invalidPassword: true,
+                    message: 'Contraseña incorrecta. Por favor verifica e intenta nuevamente.'
+                });
+            }
+            return res.status(500).json({
+                message: 'Error al procesar el certificado con IA: ' + err.message
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Error al desbloquear certificado', error: error.message });
+    }
+};
+
+exports.unlockRut = async (req, res) => {
+    try {
+        const { password } = req.body;
+        if (!password || !password.trim()) {
+            return res.status(400).json({ message: 'Por favor ingresa la contraseña del RUT' });
+        }
+
+        const contract = await Contract.findOne({ user: req.user._id });
+        if (!contract || !contract.rutPath) {
+            return res.status(404).json({ message: 'No hay un RUT cargado previamente' });
+        }
+
+        if (!fs.existsSync(contract.rutPath)) {
+            return res.status(404).json({ message: 'El archivo del RUT no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        }
+
+        try {
+            console.log("Intentando desbloquear RUT con contraseña ingresada...");
+            const rutExtracted = await extractRutData(contract.rutPath, {
+                password: password.trim(),
+                candidatePasswords: []
+            });
+
+            if (rutExtracted) {
+                if (rutExtracted.contractorAddress) contract.contractorAddress = rutExtracted.contractorAddress;
+                if (rutExtracted.idCity) contract.idCity = rutExtracted.idCity;
+                if (typeof rutExtracted.isTaxFiler === 'boolean') contract.isTaxFiler = rutExtracted.isTaxFiler;
+                if (rutExtracted.contractorPhone && !contract.contractorPhone) contract.contractorPhone = rutExtracted.contractorPhone;
+                if (rutExtracted.contractorEmail && !contract.contractorEmail) contract.contractorEmail = rutExtracted.contractorEmail;
+                await contract.save();
+            }
+
+            return res.json({
+                success: true,
+                message: '¡RUT desbloqueado y procesado por IA con éxito! Datos fiscales actualizados.',
+                data: contract,
+                extracted: rutExtracted
+            });
+        } catch (err) {
+            if (err.code === 'PASSWORD_REQUIRED') {
+                return res.status(400).json({
+                    requiresPassword: true,
+                    docType: 'rut',
+                    invalidPassword: true,
+                    message: 'Contraseña incorrecta. Por favor verifica e intenta nuevamente.'
+                });
+            }
+            return res.status(500).json({
+                message: 'Error al procesar el RUT con IA: ' + err.message
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Error al desbloquear el RUT', error: error.message });
     }
 };
 

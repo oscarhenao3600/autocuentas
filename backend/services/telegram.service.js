@@ -4,7 +4,7 @@ const User = require('../models/User');
 const Contract = require('../models/Contract');
 const BillingPeriod = require('../models/BillingPeriod');
 const geminiService = require('./gemini.service');
-const { calculatePeriods, filterSpecificObligations, isGeneralObligation } = require('../utils/period.utils');
+const { calculatePeriods, filterSpecificObligations, isGeneralObligation, getContractDurationText } = require('../utils/period.utils');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let lastUpdateId = 0;
@@ -672,7 +672,9 @@ const finishDocsFlow = async (chatId, user) => {
         summaryMsg += `• Funcionario: ${contract ? (contract.contractorName || user.fullName) : user.fullName}\n`;
         summaryMsg += `• Cédula: ${contract ? (contract.idNumber || 'N/A') : 'N/A'}\n`;
         summaryMsg += `• Contrato N°: ${contract && contract.contractNumber ? contract.contractNumber : 'Pendiente'}\n`;
-        summaryMsg += `• Fecha Inicio: ${contract && contract.startDate ? contract.startDate : 'Pendiente'}\n`;
+        summaryMsg += `• Fecha Inicio: ${contract && contract.startDate ? contract.startDate.split('T')[0] : 'Pendiente'}\n`;
+        summaryMsg += `• Fecha Fin: ${contract && contract.endDate ? contract.endDate.split('T')[0] : 'Pendiente'}\n`;
+        summaryMsg += `• Plazo / Duración: ${getContractDurationText(contract)}\n`;
         summaryMsg += `• RP: ${contract && contract.rp ? contract.rp : 'Pendiente'} | CDP: ${contract && contract.cdp ? contract.cdp : 'Pendiente'}\n`;
         summaryMsg += `• Rubro: ${contract && contract.rubro ? contract.rubro : 'Pendiente'}\n`;
         summaryMsg += `• Banco: ${contract && contract.bankName ? contract.bankName : 'Pendiente'} (${contract && contract.accountNumber ? contract.accountNumber : ''})\n`;
@@ -1360,6 +1362,8 @@ const handleIncomingMessage = async (message) => {
                         if (extracted.idNumber && !contract.idNumber) contract.idNumber = extracted.idNumber;
                         if (extracted.startDate) contract.startDate = extracted.startDate;
                         if (extracted.endDate) contract.endDate = extracted.endDate;
+                        if (extracted.periodType) contract.periodType = extracted.periodType;
+                        if (extracted.initialDurationMonths) contract.initialDurationMonths = Number(extracted.initialDurationMonths);
                         if (extracted.cdp) contract.cdp = extracted.cdp;
                         if (extracted.rp) contract.rp = extracted.rp;
                         if (extracted.rubro) contract.rubro = extracted.rubro;
@@ -1429,12 +1433,19 @@ const handleIncomingMessage = async (message) => {
                         const extracted = await geminiService.extractActaInicioData(fileInfo.absolutePath);
                         if (extracted) {
                             if (extracted.startDate) contract.startDate = extracted.startDate;
+                            if (extracted.endDate) contract.endDate = extracted.endDate;
                             if (extracted.contractNumber && !contract.contractNumber) contract.contractNumber = extracted.contractNumber;
                             if (extracted.supervisorName && !contract.supervisorName) contract.supervisorName = extracted.supervisorName;
                             if (extracted.initialDurationMonths) contract.initialDurationMonths = Number(extracted.initialDurationMonths);
                         }
                         await contract.save();
-                        await sendTelegramMessage(chatId, `✅ Acta de Inicio procesada con éxito.\n📅 Fecha de inicio: ${contract.startDate || 'N/A'}`);
+                        const durText = getContractDurationText(contract);
+                        let actaMsg = `✅ Acta de Inicio procesada con éxito.\n📅 Fecha de inicio: ${contract.startDate ? contract.startDate.split('T')[0] : 'N/A'}`;
+                        if (contract.endDate) {
+                            actaMsg += `\n📅 Fecha fin: ${contract.endDate.split('T')[0]}`;
+                        }
+                        actaMsg += `\n⏱️ Plazo / Duración: ${durText}`;
+                        await sendTelegramMessage(chatId, actaMsg);
                     } catch (aiErr) {
                         console.error('Error de IA en Acta de Inicio:', aiErr);
                         await contract.save();
@@ -1530,19 +1541,35 @@ const handleIncomingMessage = async (message) => {
                 let contract = await Contract.findOne({ user: user._id });
                 if (contract) {
                     contract.rutPath = fileInfo.relativePath;
+                    const candidates = [];
+                    if (contract.idNumber) {
+                        candidates.push(contract.idNumber.trim());
+                        const clean = contract.idNumber.replace(/\D/g, '');
+                        if (clean && clean !== contract.idNumber.trim()) candidates.push(clean);
+                    }
+
                     try {
-                        const extracted = await geminiService.extractRutData(fileInfo.absolutePath);
+                        const extracted = await geminiService.extractRutData(fileInfo.absolutePath, {
+                            candidatePasswords: candidates
+                        });
                         if (extracted) {
                             if (extracted.contractorAddress) contract.contractorAddress = extracted.contractorAddress;
                             if (extracted.idCity) contract.idCity = extracted.idCity;
                             if (typeof extracted.isTaxFiler === 'boolean') contract.isTaxFiler = extracted.isTaxFiler;
+                            if (extracted.contractorPhone && !contract.contractorPhone) contract.contractorPhone = extracted.contractorPhone;
+                            if (extracted.contractorEmail && !contract.contractorEmail) contract.contractorEmail = extracted.contractorEmail;
                         }
                         await contract.save();
-                        await sendTelegramMessage(chatId, `✅ RUT procesado con éxito.\n📍 Dirección: ${contract.contractorAddress || 'N/A'} (${contract.idCity || ''})\n💼 Declarante de Renta: ${contract.isTaxFiler ? 'Sí' : 'No'}`);
+                        const note = extracted?.unlockedWithCedula ? ' (desbloqueado automáticamente con tu cédula)' : '';
+                        await sendTelegramMessage(chatId, `✅ RUT procesado con éxito${note}.\n📍 Dirección: ${contract.contractorAddress || 'N/A'} (${contract.idCity || ''})\n💼 Declarante de Renta: ${contract.isTaxFiler ? 'Sí' : 'No'}`);
                     } catch (aiErr) {
                         console.error('Error de IA en RUT:', aiErr);
                         await contract.save();
-                        await sendTelegramMessage(chatId, `⚠️ Se guardó el RUT (${aiErr.message}).`);
+                        if (aiErr.code === 'PASSWORD_REQUIRED') {
+                            await sendTelegramMessage(chatId, `🔐 *RUT Protegido con Contraseña*\n\nTu RUT está protegido con clave e intentamos acceder con tu cédula (*${contract.idNumber || 'No registrada'}*), pero no coincidió.\n\nPor favor ingresa a la plataforma web para escribir la contraseña o sube un PDF sin clave.`);
+                        } else {
+                            await sendTelegramMessage(chatId, `⚠️ Se guardó el RUT (${aiErr.message}).`);
+                        }
                     }
                 }
             } catch (err) {
@@ -1582,19 +1609,33 @@ const handleIncomingMessage = async (message) => {
                 let contract = await Contract.findOne({ user: user._id });
                 if (contract) {
                     contract.bankCertificatePath = fileInfo.relativePath;
+                    const candidates = [];
+                    if (contract.idNumber) {
+                        candidates.push(contract.idNumber.trim());
+                        const clean = contract.idNumber.replace(/\D/g, '');
+                        if (clean && clean !== contract.idNumber.trim()) candidates.push(clean);
+                    }
+
                     try {
-                        const extracted = await geminiService.extractBankCertificateData(fileInfo.absolutePath);
+                        const extracted = await geminiService.extractBankCertificateData(fileInfo.absolutePath, {
+                            candidatePasswords: candidates
+                        });
                         if (extracted) {
                             if (extracted.bankName) contract.bankName = extracted.bankName;
                             if (extracted.accountNumber) contract.accountNumber = extracted.accountNumber;
                             if (extracted.paymentMethod) contract.paymentMethod = extracted.paymentMethod;
                         }
                         await contract.save();
-                        await sendTelegramMessage(chatId, `✅ Certificación Bancaria procesada con éxito.\n🏦 Banco: ${contract.bankName || 'N/A'}\n💳 Cuenta: ${contract.paymentMethod || 'Ahorros'} N° ${contract.accountNumber || 'N/A'}`);
+                        const note = extracted?.unlockedWithCedula ? ' (desbloqueada automáticamente con tu cédula)' : '';
+                        await sendTelegramMessage(chatId, `✅ Certificación Bancaria procesada con éxito${note}.\n🏦 Banco: ${contract.bankName || 'N/A'}\n💳 Cuenta: ${contract.paymentMethod || 'Ahorros'} N° ${contract.accountNumber || 'N/A'}`);
                     } catch (aiErr) {
                         console.error('Error de IA en Certificación Bancaria:', aiErr);
                         await contract.save();
-                        await sendTelegramMessage(chatId, `⚠️ Se guardó la Certificación Bancaria (${aiErr.message}).`);
+                        if (aiErr.code === 'PASSWORD_REQUIRED') {
+                            await sendTelegramMessage(chatId, `🔐 *Certificado Bancario Protegido con Contraseña*\n\nTu certificación bancaria está protegida con clave e intentamos acceder con tu cédula (*${contract.idNumber || 'No registrada'}*), pero no coincidió.\n\nPor favor ingresa a la plataforma web para escribir la contraseña o sube un PDF sin clave.`);
+                        } else {
+                            await sendTelegramMessage(chatId, `⚠️ Se guardó la Certificación Bancaria (${aiErr.message}).`);
+                        }
                     }
                 }
             } catch (err) {

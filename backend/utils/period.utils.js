@@ -125,9 +125,80 @@ const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, p
     return periods;
 };
 
+/**
+ * Determina y formatea el plazo o duración de un contrato (en días o meses)
+ * @param {Object} contract - Objeto con datos del contrato
+ * @returns {string} - Texto descriptivo ej: "115 días", "4 meses", "6 meses (4 iniciales + 2 adición)"
+ */
+const getContractDurationText = (contract) => {
+    if (!contract) return 'Pendiente';
+
+    // 1. Detectar si el texto de endDate o periodType indica días
+    const hasDaysText = contract.endDate && /d[ií]as?/i.test(String(contract.endDate));
+    const isByDays = contract.periodType === '30_dias' || hasDaysText;
+
+    let diffDays = null;
+
+    // Intentar calcular días entre startDate y endDate si son fechas válidas
+    if (contract.startDate && contract.endDate) {
+        try {
+            const rawStart = String(contract.startDate).split('T')[0].trim();
+            const rawEnd = String(contract.endDate).split('T')[0].trim();
+            const [sy, sm, sd] = rawStart.split('-').map(Number);
+            const [ey, em, ed] = rawEnd.split('-').map(Number);
+            if (!isNaN(sy) && !isNaN(sm) && !isNaN(sd) && !isNaN(ey) && !isNaN(em) && !isNaN(ed)) {
+                const start = new Date(sy, sm - 1, sd);
+                const end = new Date(ey, em - 1, ed);
+                const diffTime = end.getTime() - start.getTime();
+                if (diffTime >= 0) {
+                    diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                }
+            }
+        } catch (_) {}
+    }
+
+    // Si no se pudo calcular por fechas, verificar si endDate tiene un número de días en texto
+    if (!diffDays && contract.endDate) {
+        const match = String(contract.endDate).match(/(\d+)\s*d[ií]as?/i);
+        if (match) {
+            diffDays = parseInt(match[1], 10);
+        }
+    }
+
+    if (isByDays) {
+        if (diffDays) {
+            return `${diffDays} días`;
+        }
+        if (contract.initialDurationMonths) {
+            return `${contract.initialDurationMonths * 30} días (${contract.initialDurationMonths} periodos)`;
+        }
+        return 'Por días';
+    } else {
+        // Por meses (mes_cumplido)
+        const months = Number(contract.initialDurationMonths) || 0;
+        const addMonths = contract.hasAddition ? (Number(contract.additionDurationMonths) || 0) : 0;
+        const totalMonths = months + addMonths;
+
+        if (totalMonths > 0) {
+            if (addMonths > 0) {
+                return `${totalMonths} meses (${months} iniciales + ${addMonths} adición)`;
+            }
+            return `${months} ${months === 1 ? 'mes' : 'meses'}`;
+        }
+
+        if (diffDays) {
+            const approxMonths = Math.round(diffDays / 30);
+            return `${approxMonths} ${approxMonths === 1 ? 'mes' : 'meses'} (${diffDays} días)`;
+        }
+
+        return 'Por meses';
+    }
+};
+
 module.exports = {
     calculatePeriods,
     isGeneralObligation,
     filterSpecificObligations,
-    formatDateStr
+    formatDateStr,
+    getContractDurationText
 };
