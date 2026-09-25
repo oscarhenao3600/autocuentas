@@ -101,7 +101,16 @@ exports.createBillingZip = async (billingPeriod, contract, user) => {
                         const evPath = evidence.path;
                         if (evPath) {
                             const ext = path.extname(evidence.filename || evPath) || '.jpg';
-                            const destFileName = `${actFolderCode}/Evidencia_${index + 1}${ext}`;
+                            const mime = (evidence.mimetype || '').toLowerCase();
+                            const isImg = mime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'].includes(ext.toLowerCase());
+                            
+                            let destFileName;
+                            if (isImg) {
+                                destFileName = `${actFolderCode}/Foto_${index + 1}${ext}`;
+                            } else {
+                                const countSuffix = act.evidences.length > 1 ? `_${index + 1}` : '';
+                                destFileName = `${actFolderCode}/Anexo_${actFolderCode}${countSuffix}${ext}`;
+                            }
                             addFileToZip(evPath, destFileName);
                         }
                     });

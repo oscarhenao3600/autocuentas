@@ -549,6 +549,19 @@ const ContractSetup = () => {
                                         onChange={(e) => setContract({...contract, cutoffDay: parseInt(e.target.value) || 25})} 
                                     />
                                 </div>
+                                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <label className="label">Plazo de Ejecución (Texto literal de la Minuta / Días)</label>
+                                    <input 
+                                        className="input" 
+                                        type="text"
+                                        placeholder="Ej: CIENTO QUINCE (115) DIAS CALENDARIO CONTADOS A PARTIR DE LA CONFIGURACIÓN DEL INICIO EN LA PLATAFORMA SECOP II."
+                                        value={contract.executionTerm || ''} 
+                                        onChange={(e) => setContract({...contract, executionTerm: e.target.value})} 
+                                    />
+                                    <small style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                                        Este texto se insertará exactamente en el campo "Plazo de Ejecución" del Informe de Actividades.
+                                    </small>
+                                </div>
                             </div>
                         </div>
 

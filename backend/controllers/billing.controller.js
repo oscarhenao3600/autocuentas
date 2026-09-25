@@ -59,16 +59,41 @@ function formatActivitiesText(acts) {
     }).join('\n\n');
 }
 
+function isImageEvidence(ev) {
+    if (!ev) return false;
+    const mime = (ev.mimetype || '').toLowerCase();
+    const ext = path.extname(ev.filename || ev.path || '').toLowerCase();
+    return mime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'].includes(ext);
+}
+
 function formatEvidencesText(acts) {
     if (!acts || acts.length === 0) return 'Archivos de soporte digital anexos en el paquete de cobro.';
     return acts.map((act, i) => {
         const code = act.obligationCode || `2.2.${i + 1}`;
-        if (act.evidences && act.evidences.length > 0) {
-            const files = act.evidences.map(e => e.filename || 'Archivo adjunto').join(', ');
-            return `Obligación ${code}: Soporte digital en carpeta ${code} (${files})`;
-        } else {
-            return `Obligación ${code}: Soporte digital en carpeta ${code}`;
+        if (!act.evidences || act.evidences.length === 0) {
+            return `Obligación ${code}: Sin soportes cargados`;
         }
+
+        const photos = act.evidences.filter(isImageEvidence);
+        const docs = act.evidences.filter(ev => !isImageEvidence(ev));
+
+        const parts = [];
+        if (docs.length > 0) {
+            if (docs.length === 1) {
+                parts.push(`Anexo ${code}`);
+            } else {
+                parts.push(`Anexos ${docs.map((_, idx) => `${code}-${idx + 1}`).join(', ')}`);
+            }
+        }
+        if (photos.length > 0) {
+            if (photos.length === 1) {
+                parts.push(`Registro fotográfico adjunto`);
+            } else {
+                parts.push(`Registro fotográfico adjunto (${photos.length} fotos)`);
+            }
+        }
+
+        return `Obligación ${code}: ${parts.join(', ')}`;
     }).join('\n');
 }
 
@@ -185,17 +210,17 @@ exports.saveBillingPeriod = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────────────────────
-// POST /api/billing/:id/generate  →  Generate all 4 Word docs + ZIP
+// Helper / Function: Generate all 4 Word docs + ZIP for a BillingPeriod
 // ──────────────────────────────────────────────────────────────
-exports.generatePackage = async (req, res) => {
-    try {
-        const period = await BillingPeriod.findOne({ _id: req.params.id, user: req.user._id });
-        if (!period) return res.status(404).json({ message: 'Periodo no encontrado' });
+const generateBillingPackage = async (periodId, userId) => {
+    const period = await BillingPeriod.findOne({ _id: periodId, user: userId });
+    if (!period) throw new Error('Periodo no encontrado');
 
-        const contract = await Contract.findOne({ user: req.user._id });
-        if (!contract) return res.status(400).json({ message: 'Debe configurar su contrato antes de generar el paquete' });
+    const contract = await Contract.findOne({ user: userId });
+    if (!contract) throw new Error('Debe configurar su contrato antes de generar el paquete');
 
-        const user = await User.findById(req.user._id).select('-password');
+    const user = await User.findById(userId).select('-password');
+    if (!user) throw new Error('Usuario no encontrado');
 
         // ── Compute IBC ──────────────────────────────────────────
         const ibc = calcIbc(contract.monthlyValue);
@@ -281,6 +306,42 @@ exports.generatePackage = async (req, res) => {
         const isTaxFiler = !!contract.isTaxFiler;
         const previousTaxYear = (parseInt(anio, 10) - 1).toString();
 
+        // Plazo de ejecución respetando la minuta (ej. 115 días calendario)
+        let plazoEjecucionText = (contract.executionTerm || '').trim();
+        if (!plazoEjecucionText) {
+            if (contract.startDate && contract.endDate) {
+                try {
+                    const rawStart = String(contract.startDate).split('T')[0].trim();
+                    const rawEnd = String(contract.endDate).split('T')[0].trim();
+                    const [sy, sm, sd] = rawStart.split('-').map(Number);
+                    const [ey, em, ed] = rawEnd.split('-').map(Number);
+                    if (!isNaN(sy) && !isNaN(sm) && !isNaN(sd) && !isNaN(ey) && !isNaN(em) && !isNaN(ed)) {
+                        const start = new Date(sy, sm - 1, sd);
+                        const end = new Date(ey, em - 1, ed);
+                        const diffTime = end.getTime() - start.getTime();
+                        if (diffTime >= 0) {
+                            const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                            if (contract.periodType === '30_dias' || diffDays % 30 !== 0) {
+                                plazoEjecucionText = `${diffDays} DÍAS CALENDARIO`;
+                            }
+                        }
+                    }
+                } catch (_) {}
+            }
+        }
+        if (!plazoEjecucionText) {
+            if (contract.periodType === '30_dias' && contract.initialDurationMonths) {
+                plazoEjecucionText = `${contract.initialDurationMonths * 30} DÍAS CALENDARIO`;
+            } else if (contract.initialDurationMonths) {
+                plazoEjecucionText = `${contract.initialDurationMonths} MESES`;
+            } else {
+                plazoEjecucionText = 'CUATRO (04) MESES';
+            }
+        }
+        if (contract.hasAddition && contract.additionDuration) {
+            plazoEjecucionText += ` MÁS ADICIÓN DE ${contract.additionDuration}`;
+        }
+
         const commonData = {
             // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
             fecha_certificado:                 formatDateEs(period.periodTo),
@@ -328,9 +389,7 @@ exports.generatePackage = async (req, res) => {
 
             // ── NUEVAS VARIABLES (snake_case) para INFORME DE ACTIVIDADES ──
             objeto_contrato:                   contract.contractObject || '',
-            plazo_ejecucion:                   contract.hasAddition && contract.additionDuration
-                ? `${contract.initialDurationMonths || 4} MESES MÁS ADICIÓN DE ${contract.additionDuration}`
-                : (contract.initialDurationMonths ? `${contract.initialDurationMonths} MESES` : (contract.additionDuration || 'CUATRO (04) MESES')),
+            plazo_ejecucion:                   plazoEjecucionText,
             acta_parcial_anio:                 anio,
             acta_parcial_mes:                  mes,
             acta_parcial_dia:                  period.periodTo ? (parseDateSafe(period.periodTo)?.getDate().toString() || '') : '',
@@ -461,6 +520,50 @@ exports.generatePackage = async (req, res) => {
             }))
         };
 
+        // Helper to resolve physical evidence paths
+        const resolveSafeEvidencePath = (filePath) => {
+            if (!filePath) return null;
+            if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
+            if (fs.existsSync(filePath)) return path.resolve(filePath);
+            const fromBackend = path.resolve(__dirname, '..', filePath);
+            if (fs.existsSync(fromBackend)) return fromBackend;
+            const normalized = filePath.replace(/\\/g, '/');
+            const fromBackendNorm = path.resolve(__dirname, '..', normalized);
+            if (fs.existsSync(fromBackendNorm)) return fromBackendNorm;
+            return null;
+        };
+
+        const fotos_evidencias = [];
+        (period.activities || []).forEach((act, i) => {
+            const code = act.obligationCode || `2.2.${i + 1}`;
+            if (act.evidences && act.evidences.length > 0) {
+                const photos = act.evidences.filter(isImageEvidence);
+                let photoIndex = 0;
+                act.evidences.forEach((ev) => {
+                    if (isImageEvidence(ev) && ev.path) {
+                        photoIndex++;
+                        const resolved = resolveSafeEvidencePath(ev.path);
+                        if (resolved && fs.existsSync(resolved)) {
+                            const totalPhotos = photos.length;
+                            const titleSuffix = totalPhotos > 1 ? ` (Evidencia ${photoIndex} de ${totalPhotos})` : '';
+                            const desc = (ev.description && ev.description.trim().length > 0)
+                                ? ev.description.trim()
+                                : (act.comment && act.comment.trim().length > 0
+                                    ? act.comment.trim()
+                                    : (act.obligationText || `Soporte fotográfico de la obligación ${code}`));
+                            fotos_evidencias.push({
+                                codigo: `${code}${titleSuffix}`,
+                                descripcion: desc,
+                                foto: resolved
+                            });
+                        }
+                    }
+                });
+            }
+        });
+
+        commonData.fotos_evidencias = fotos_evidencias;
+        commonData.tiene_fotos_evidencias = fotos_evidencias.length > 0;
 
         // ── Generate 4 Word documents ─────────────────────────────
         const templates = [
@@ -490,12 +593,23 @@ exports.generatePackage = async (req, res) => {
         period.status  = 'pending'; // ready but not yet approved
         await period.save();
 
+        return { period, contract, user, zipPath, generatedPaths };
+};
+
+exports.generateBillingPackage = generateBillingPackage;
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/billing/:id/generate  →  Generate all 4 Word docs + ZIP
+// ──────────────────────────────────────────────────────────────
+exports.generatePackage = async (req, res) => {
+    try {
+        const { period, zipPath } = await generateBillingPackage(req.params.id, req.user._id);
+
         res.json({
             message: 'Paquete generado con éxito',
             zipUrl: `/generated/${path.basename(zipPath)}`,
             data: period
         });
-
     } catch (err) {
         console.error('Error generatePackage:', err);
         res.status(500).json({ message: 'Error al generar el paquete', error: err.message });

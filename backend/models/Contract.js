@@ -88,6 +88,10 @@ const contractSchema = new mongoose.Schema({
         type: Number,
         default: 4
     },
+    executionTerm: {
+        type: String,
+        default: ""
+    },
     additionDurationMonths: {
         type: Number,
         default: 0

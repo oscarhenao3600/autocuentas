@@ -51,7 +51,8 @@ exports.extractContractData = async (filePath) => {
             - contractType (Clase o tipo de contrato, ej: Prestación de Servicios de Apoyo a la Gestión o Profesionales)
             - contractNumber (Número de contrato, ej: 042-2026 o TIC-CD-2026-055 o CO1.PCCNTR.9868582)
             - startDate (Fecha oficial de inicio de ejecución en formato YYYY-MM-DD. ADVERTENCIA: NO tomes la fecha de expedición del registro presupuestal RP, ni de expedición del CDP, ni la fecha de hoy. Si la minuta estipula que el plazo inicia con el Acta de Inicio o con la configuración en SECOP II y NO incluye una fecha exacta de calendario, déjalo como string vacío "")
-            - endDate (Fecha de terminación o plazo de ejecución expresado en la minuta, ej: "CIENTO QUINCE (115) DIAS CALENDARIO...")
+            - endDate (Fecha de terminación o plazo de ejecución expresado en la minuta, ej: "2026-12-20" o fecha calculada. Si no hay fecha exacta de calendario, déjalo vacío "")
+            - executionTerm (Texto literal completo del plazo de ejecución exactamente como aparece en la cláusula o campo de "PLAZO DE EJECUCIÓN" de la minuta, ej: "CIENTO QUINCE (115) DIAS CALENDARIO CONTADOS A PARTIR DE LA CONFIGURACIÓN DEL INICIO EN LA PLATAFORMA SECOP II." o "115 DÍAS CALENDARIO" o "CUATRO (04) MESES")
             - periodType (Analiza con cuidado las cláusulas de "VALOR Y FORMA DE PAGO" y "PLAZO DE EJECUCIÓN". Si dice que los pagos se realizarán cada "treinta (30) días calendario" o "30 días calendario", debe ser exactamente "30_dias". Si dice pagos por mensualidades, mes vencido, mensual o mes cumplido, debe ser exactamente "mes_cumplido". Solo debe ser uno de estos dos valores exactos: "30_dias" o "mes_cumplido")
             - initialDurationMonths (Número entero de periodos de cobro o meses pactados. Ej: si dice 4 meses, pon 4; si dice 115 días calendario distribuidos en 4 pagos [3 de 30 días y 1 de 25 días], pon 4)
             - cdp (Número de Certificado de Disponibilidad Presupuestal - CDP, si aparece)
@@ -389,6 +390,7 @@ exports.extractActaInicioData = async (filePath) => {
             - contractNumber (Número de contrato relacionado, ej: 014-2026 o TIC-CD-2026-055 o CO1.PCCNTR.9868582)
             - supervisorName (Nombre del supervisor que aprueba o firma el acta o figura en la entidad estatal)
             - initialDurationMonths (Plazo en meses si aparece especificado como número entero ej: 4, o la duración en meses calculada a partir de los días o fechas)
+            - executionTerm (Texto literal del plazo o duración del contrato si aparece en texto o días, ej: "CIENTO QUINCE (115) DIAS CALENDARIO..." o "115 DÍAS CALENDARIO")
         `;
 
         let result;

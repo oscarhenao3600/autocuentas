@@ -133,8 +133,9 @@ const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, p
 const getContractDurationText = (contract) => {
     if (!contract) return 'Pendiente';
 
-    // 1. Detectar si el texto de endDate o periodType indica días
-    const hasDaysText = contract.endDate && /d[ií]as?/i.test(String(contract.endDate));
+    // 1. Detectar si el texto de endDate, executionTerm o periodType indica días
+    const hasDaysText = (contract.endDate && /d[ií]as?/i.test(String(contract.endDate))) ||
+                        (contract.executionTerm && /d[ií]as?/i.test(String(contract.executionTerm)));
     const isByDays = contract.periodType === '30_dias' || hasDaysText;
 
     let diffDays = null;
@@ -157,7 +158,13 @@ const getContractDurationText = (contract) => {
         } catch (_) {}
     }
 
-    // Si no se pudo calcular por fechas, verificar si endDate tiene un número de días en texto
+    // Si no se pudo calcular por fechas, verificar si executionTerm o endDate tiene un número de días en texto
+    if (!diffDays && contract.executionTerm) {
+        const match = String(contract.executionTerm).match(/(\d+)\s*d[ií]as?/i);
+        if (match) {
+            diffDays = parseInt(match[1], 10);
+        }
+    }
     if (!diffDays && contract.endDate) {
         const match = String(contract.endDate).match(/(\d+)\s*d[ií]as?/i);
         if (match) {

@@ -35,7 +35,11 @@ const billingPeriodSchema = new mongoose.Schema({
         evidences: [{
             filename: String,
             path: String,
-            mimetype: String
+            mimetype: String,
+            description: {
+                type: String,
+                default: ""
+            }
         }]
     }],
     securitySocial: {

@@ -311,7 +311,8 @@ exports.updateContract = async (req, res) => {
             'idCity', 'contractorEmail', 'isTaxFiler', 'takesCosts', 'takesExemptRent',
             'periodType', 'initialDurationMonths', 'additionDurationMonths', 'hasAddition',
             'additionValue', 'additionValueWord', 'additionStartDate', 'additionEndDate',
-            'additionCdp', 'additionRp', 'additionRubro', 'additionDuration'
+            'additionCdp', 'additionRp', 'additionRubro', 'additionDuration',
+            'executionTerm'
         ];
 
         allowedFields.forEach(field => {
@@ -459,6 +460,7 @@ exports.uploadActaInicio = async (req, res) => {
         if (actaData.contractNumber && !contract.contractNumber) contract.contractNumber = actaData.contractNumber;
         if (actaData.supervisorName && !contract.supervisorName) contract.supervisorName = actaData.supervisorName;
         if (actaData.initialDurationMonths) contract.initialDurationMonths = Number(actaData.initialDurationMonths);
+        if (actaData.executionTerm && !contract.executionTerm) contract.executionTerm = actaData.executionTerm;
 
         await contract.save();
 
