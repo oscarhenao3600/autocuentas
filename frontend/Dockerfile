@@ -3,7 +3,11 @@ FROM node:20-alpine as build
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+
+# Limit node memory to 512MB to prevent OOM killer on 1GB Raspberry Pi 3
+ENV NODE_OPTIONS="--max-old-space-size=512"
+RUN npm install --no-audit --no-fund
+
 COPY . .
 RUN npm run build
 

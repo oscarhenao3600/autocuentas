@@ -51,19 +51,26 @@ const period = {
             obligationCode: "2.1",
             obligationText: "Desarrollar y configurar el modulo del bot de Telegram.",
             comment: "Se completo el desarrollo del bot de Telegram con teclados interactivos y carga de archivos.",
-            evidences: [{ filename: "evidencia_bot.png", path: "uploads/test-bot.png", mimetype: "image/png" }]
+            evidences: [
+                { filename: "menu_bot.jpg", path: "uploads/dummy_test.jpg", mimetype: "image/jpeg", description: "Captura del menú principal con comandos" },
+                { filename: "subida_evidencia.jpg", path: "uploads/dummy_test.jpg", mimetype: "image/jpeg", description: "Flujo de recepción de documentos y fotos" }
+            ]
         },
         {
             obligationCode: "2.2",
             obligationText: "Implementar la base de datos de evidencias y comentarios.",
             comment: "Se integro la base de datos MongoDB para almacenar las rutas de los archivos cargados.",
-            evidences: [{ filename: "evidencia_db.pdf", path: "uploads/test-db.pdf", mimetype: "application/pdf" }]
+            evidences: [
+                { filename: "diagrama_bd.pdf", path: "uploads/diagrama_bd.pdf", mimetype: "application/pdf" }
+            ]
         },
         {
             obligationCode: "2.3",
             obligationText: "Realizar pruebas de integracion con el panel web y docker.",
             comment: "Se verificaron las pruebas de ejecucion local y de docker-compose.",
-            evidences: []
+            evidences: [
+                { filename: "consola_pruebas.jpg", path: "uploads/dummy_test.jpg", mimetype: "image/jpeg", description: "Consola de Docker con contenedores levantados" }
+            ]
         }
     ]
 };
@@ -78,12 +85,37 @@ const MONTHS_ES = [
     'enero','febrero','marzo','abril','mayo','junio',
     'julio','agosto','septiembre','octubre','noviembre','diciembre'
 ];
+function parseDateSafe(dateInput) {
+    if (!dateInput) return null;
+    if (typeof dateInput === 'string') {
+        const clean = dateInput.trim();
+        const datePart = clean.split('T')[0];
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const [y, m, d] = datePart.split('-').map(Number);
+            return new Date(y, m - 1, d);
+        }
+    } else if (dateInput instanceof Date && !isNaN(dateInput.getTime())) {
+        return dateInput;
+    }
+    const d = new Date(dateInput);
+    return isNaN(d.getTime()) ? null : d;
+}
+
 function formatDateEs(date) {
-    const d = new Date(date);
+    const d = parseDateSafe(date);
+    if (!d) return '';
     return `${d.getDate()} de ${MONTHS_ES[d.getMonth()]} de ${d.getFullYear()}`;
 }
+function formatDateNumeric(date) {
+    const d = parseDateSafe(date);
+    if (!d) return '';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day} - ${month} - ${year}`;
+}
 function monthYearEs(date) {
-    const d = new Date(date);
+    const d = parseDateSafe(date) || new Date();
     return { mes: MONTHS_ES[d.getMonth()].toUpperCase(), anio: d.getFullYear().toString() };
 }
 
@@ -139,17 +171,21 @@ const pensionValFormatted = Number(period.securitySocial?.pensionPaid || 0).toLo
 const arlValFormatted = Number(period.securitySocial?.arlPaid || 0).toLocaleString('es-CO');
 const ssTotalFormatted = Number(period.securitySocial?.totalPaid || 0).toLocaleString('es-CO');
 
+const periodToDateObj = parseDateSafe(period.periodTo);
+const actaParcialDia = periodToDateObj ? String(periodToDateObj.getDate()).padStart(2, '0') : '';
+const actaParcialMesNum = periodToDateObj ? String(periodToDateObj.getMonth() + 1).padStart(2, '0') : '';
+
 const commonData = {
     // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
-    fecha_certificado:                 formatDateEs(period.periodTo),
+    fecha_certificado:                 formatDateNumeric(period.periodTo),
     nombre_supervisor:                 contract.supervisorName || '',
     dependencia:                       contract.supervisorDependency || 'Secretaría de Planeación',
     nombre_contratista:                contract.contractorName || '',
     identificacion_contratista:        contract.idNumber || '',
     tipo_contrato:                     contract.contractType || 'Prestación de Servicios Profesionales',
     numero_contrato:                   contract.contractNumber || '',
-    fecha_acta_inicio:                 formatDateEs(period.periodFrom),
-    fecha_terminacion:                 formatDateEs(period.periodTo),
+    fecha_acta_inicio:                 formatDateNumeric(period.periodFrom),
+    fecha_terminacion:                 formatDateNumeric(period.periodTo),
     cdp:                               contract.cdp || '',
     rp:                                contract.rp || '',
     rubro_presupuestal:                contract.rubro || '',
@@ -159,8 +195,8 @@ const commonData = {
     numero_cuenta:                     contract.accountNumber || '',
     saldo_restante:                    remainingValFormatted,
     forma_pago:                        formaPagoText,
-    periodo_pagar_inicio:              formatDateEs(period.periodFrom),
-    periodo_pagar_fin:                 formatDateEs(period.periodTo),
+    periodo_pagar_inicio:              formatDateNumeric(period.periodFrom),
+    periodo_pagar_fin:                 formatDateNumeric(period.periodTo),
     mes_planilla:                      period.securitySocial?.period || mes,
     numero_planilla:                   period.securitySocial?.planillaNumber || '',
     valor_pension:                     pensionValFormatted,
@@ -184,6 +220,39 @@ const commonData = {
     chk_otros:                         period.actNumber > 9 ? "[ X ]" : "[   ]",
     otros_cual:                        period.actNumber > 9 ? (ACT_TEXTS[period.actNumber] || `PAGO ${period.actNumber}`) : "",
 
+    // ── NUEVAS VARIABLES (snake_case) para INFORME DE ACTIVIDADES ──
+    objeto_contrato:                   contract.contractObject || '',
+    plazo_ejecucion:                   'CUATRO (04) MESES',
+    acta_parcial_anio:                 anio,
+    acta_parcial_mes:                  actaParcialMesNum,
+    acta_parcial_dia:                  actaParcialDia,
+    numero_acta_parcial:               period.actNumber.toString(),
+    periodo_informado_inicio:          formatDateNumeric(period.periodFrom),
+    periodo_informado_fin:             formatDateNumeric(period.periodTo),
+    actividades_desarrolladas:         'Actividades ejecutadas a satisfacción durante el periodo reportado.',
+    evidencias_ejecucion:              'Registro fotográfico adjunto',
+    anticipo:                          "0",
+    valor_acta_1:                      monthlyValFormatted,
+    valor_acta_2:                      monthlyValFormatted,
+    valor_acta_3:                      monthlyValFormatted,
+    valor_acta_n:                      "0",
+    valor_a_pagar_acta_actual:         monthlyValFormatted,
+    saldo_pendiente:                   remainingValFormatted,
+    otros_contratos_si:                "[   ]",
+    otros_contratos_no:                "[ X ]",
+    valor_ingresos_mensualizados:      monthlyValFormatted,
+    valor_ibc:                         ibc.toLocaleString('es-CO'),
+    entidad_pago_aportes:              period.securitySocial?.operator || 'SIMPLE',
+    valor_total_aporte:                ssTotalFormatted,
+    numero_recibo_aportes:             period.securitySocial?.planillaNumber || '',
+    periodo_cotizado_inicio:           formatDateNumeric(period.periodFrom),
+    periodo_cotizado_fin:              formatDateNumeric(period.periodTo),
+    chk_recibo_pago_ss:                "[ X ]",
+    chk_copias_planillas:              "[ X ]",
+    chk_anexos_otros:                  "[   ]",
+    observaciones:                     "NINGUNA",
+    firma_supervisor:                  contract.supervisorName || '',
+
     // ── NUEVAS VARIABLES (snake_case) para DESCUENTO DE ESTAMPILLAS ──
     ciudad_fecha:                      `Armenia, ${formatDateEs(period.periodTo)}`,
     direccion_contratista:             contract.contractorAddress || '',
@@ -206,7 +275,6 @@ const commonData = {
     // ── NUEVAS VARIABLES (snake_case) para RETENCION EN LA FUENTE ──
     mes_documento:                     mes.toLowerCase(),
     anio_documento:                    anio,
-    valor_a_pagar_acta_actual:         monthlyValFormatted,
     chk_costos_deducciones_no:         "[ X ]",
     chk_costos_deducciones_si:         "[   ]",
     chk_renta_exenta_si:               "[ X ]",
@@ -224,8 +292,8 @@ const commonData = {
     contractObject:   contract.contractObject,
     supervisorName:   contract.supervisorName,
     supervisorDependency: contract.supervisorDependency,
-    startDate:        formatDateEs(period.periodFrom),
-    endDate:          formatDateEs(period.periodTo),
+    startDate:        formatDateNumeric(period.periodFrom),
+    endDate:          formatDateNumeric(period.periodTo),
     totalValue:       totalValFormatted,
     totalValueWord:   contract.totalValueWord,
     monthlyValue:     monthlyValFormatted,
@@ -237,8 +305,8 @@ const commonData = {
     cdp:              contract.cdp,
     rubro:            contract.rubro,
     actNumber:        period.actNumber.toString(),
-    periodFrom:       formatDateEs(period.periodFrom),
-    periodTo:         formatDateEs(period.periodTo),
+    periodFrom:       formatDateNumeric(period.periodFrom),
+    periodTo:         formatDateNumeric(period.periodTo),
     mes,
     anio,
     hasAddition:       false,
@@ -262,7 +330,7 @@ const commonData = {
     bankName:         contract.bankName,
     accountNumber:    contract.accountNumber,
     paymentMethod:    contract.paymentMethod,
-    periodToDate:     formatDateEs(period.periodTo),
+    periodToDate:     formatDateNumeric(period.periodTo),
     remainingValue:   remainingValFormatted,
     foliosContratista: "2",
     foliosSupervisor:  "1",
@@ -285,6 +353,77 @@ const commonData = {
         comment:         act.comment
     }))
 };
+
+// Build lista_actividades with embedded photos and documents
+const resolveSafeEvidencePath = (filePath) => {
+    if (!filePath) return null;
+    if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
+    if (fs.existsSync(filePath)) return path.resolve(filePath);
+    const fromBackend = path.resolve(__dirname, filePath);
+    if (fs.existsSync(fromBackend)) return fromBackend;
+    return null;
+};
+
+const isImageEvidence = (ev) => {
+    if (!ev) return false;
+    const mime = (ev.mimetype || '').toLowerCase();
+    const ext = path.extname(ev.filename || ev.path || '').toLowerCase();
+    return mime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'].includes(ext);
+};
+
+const lista_actividades = (period.activities || []).map((act, i) => {
+    const code = act.obligationCode || `2.2.${i + 1}`;
+    const text = act.obligationText || '';
+    const comment = (act.comment && act.comment.trim().length > 0)
+        ? act.comment.trim()
+        : 'Actividades ejecutadas a satisfacción durante el periodo reportado.';
+
+    const fotos = [];
+    const documentos = [];
+
+    if (act.evidences && act.evidences.length > 0) {
+        const photos = act.evidences.filter(isImageEvidence);
+        let photoIndex = 0;
+
+        act.evidences.forEach((ev) => {
+            if (isImageEvidence(ev) && ev.path) {
+                photoIndex++;
+                const resolved = resolveSafeEvidencePath(ev.path);
+                if (resolved && fs.existsSync(resolved)) {
+                    const totalPhotos = photos.length;
+                    const titleSuffix = totalPhotos > 1 ? ` (Evidencia ${photoIndex} de ${totalPhotos})` : '';
+                    const desc = (ev.description && ev.description.trim().length > 0)
+                        ? ev.description.trim()
+                        : (act.comment && act.comment.trim().length > 0 && totalPhotos === 1
+                            ? act.comment.trim()
+                            : (act.obligationText || `Soporte fotográfico de la obligación ${code}${titleSuffix}`));
+
+                    fotos.push({
+                        descripcion: desc,
+                        foto: resolved
+                    });
+                }
+            } else if (ev.filename || ev.path) {
+                documentos.push({
+                    nombre: ev.filename || path.basename(ev.path || 'Documento adjunto')
+                });
+            }
+        });
+    }
+
+    return {
+        num: (i + 1).toString(),
+        codigo: code,
+        texto: text,
+        comentario: comment,
+        fotos,
+        tiene_fotos: fotos.length > 0,
+        documentos,
+        tiene_documentos: documentos.length > 0
+    };
+});
+
+commonData.lista_actividades = lista_actividades;
 
 async function testGeneration() {
     console.log("=== PRUEBA DE GENERACION DE DOCUMENTOS (ACTA 3) ===");

@@ -41,13 +41,20 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI)
+// MongoDB Connection with auto-retry (resilient for slow Raspberry Pi boot)
+const connectMongoWithRetry = () => {
+    const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27019/formatos_cuentas';
+    mongoose.connect(mongoUri, {
+        serverSelectionTimeoutMS: 5000,
+    })
     .then(() => console.log('✅ Connected to MongoDB safely'))
     .catch(err => {
-        console.error('❌ MongoDB Connection Error:', err.message);
-        process.exit(1);
+        console.error('⚠️ MongoDB Connection Error:', err.message);
+        console.log('⏳ Reintentando conexión a MongoDB en 5 segundos...');
+        setTimeout(connectMongoWithRetry, 5000);
     });
+};
+connectMongoWithRetry();
 
 // Static files for downloads
 const path = require('path');

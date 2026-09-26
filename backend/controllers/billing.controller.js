@@ -29,9 +29,15 @@ const MONTHS_ES = [
 ];
 function parseDateSafe(dateInput) {
     if (!dateInput) return null;
-    if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-        const [y, m, d] = dateInput.split('-').map(Number);
-        return new Date(y, m - 1, d);
+    if (typeof dateInput === 'string') {
+        const clean = dateInput.trim();
+        const datePart = clean.split('T')[0];
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const [y, m, d] = datePart.split('-').map(Number);
+            return new Date(y, m - 1, d);
+        }
+    } else if (dateInput instanceof Date && !isNaN(dateInput.getTime())) {
+        return dateInput;
     }
     const d = new Date(dateInput);
     return isNaN(d.getTime()) ? null : d;
@@ -42,6 +48,16 @@ function formatDateEs(dateInput) {
     if (!d) return '';
     return `${d.getDate()} de ${MONTHS_ES[d.getMonth()]} de ${d.getFullYear()}`;
 }
+
+function formatDateNumeric(dateInput) {
+    const d = parseDateSafe(dateInput);
+    if (!d) return '';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day} - ${month} - ${year}`;
+}
+
 function monthYearEs(dateInput) {
     const d = parseDateSafe(dateInput) || new Date();
     return { mes: MONTHS_ES[d.getMonth()].toUpperCase(), anio: d.getFullYear().toString() };
@@ -342,17 +358,21 @@ const generateBillingPackage = async (periodId, userId) => {
             plazoEjecucionText += ` MÁS ADICIÓN DE ${contract.additionDuration}`;
         }
 
+        const periodToDateObj = parseDateSafe(period.periodTo);
+        const actaParcialDia = periodToDateObj ? String(periodToDateObj.getDate()).padStart(2, '0') : '';
+        const actaParcialMesNum = periodToDateObj ? String(periodToDateObj.getMonth() + 1).padStart(2, '0') : '';
+
         const commonData = {
             // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
-            fecha_certificado:                 formatDateEs(period.periodTo),
+            fecha_certificado:                 formatDateNumeric(period.periodTo),
             nombre_supervisor:                 contract.supervisorName || '',
             dependencia:                       contract.supervisorDependency || 'Secretaría de Planeación',
             nombre_contratista:                contract.contractorName || user.fullName || '',
             identificacion_contratista:        contract.idNumber || '',
             tipo_contrato:                     contract.contractType || 'Prestación de Servicios Profesionales',
             numero_contrato:                   contract.contractNumber || '',
-            fecha_acta_inicio:                 contract.startDate ? formatDateEs(contract.startDate) : '',
-            fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateEs(contract.additionEndDate) : (contract.endDate ? formatDateEs(contract.endDate) : ''),
+            fecha_acta_inicio:                 contract.startDate ? formatDateNumeric(contract.startDate) : '',
+            fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateNumeric(contract.additionEndDate) : (contract.endDate ? formatDateNumeric(contract.endDate) : ''),
             cdp:                               periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
             rp:                                periodIsAddition ? (contract.additionRp || contract.rp || '') : (contract.rp || ''),
             rubro_presupuestal:                periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
@@ -362,8 +382,8 @@ const generateBillingPackage = async (periodId, userId) => {
             numero_cuenta:                     contract.accountNumber || '',
             saldo_restante:                    remainingValFormatted,
             forma_pago:                        formaPagoText,
-            periodo_pagar_inicio:              formatDateEs(period.periodFrom),
-            periodo_pagar_fin:                 formatDateEs(period.periodTo),
+            periodo_pagar_inicio:              formatDateNumeric(period.periodFrom),
+            periodo_pagar_fin:                 formatDateNumeric(period.periodTo),
             mes_planilla:                      period.securitySocial?.period || mes,
             numero_planilla:                   period.securitySocial?.planillaNumber || '',
             valor_pension:                     pensionValFormatted,
@@ -391,11 +411,11 @@ const generateBillingPackage = async (periodId, userId) => {
             objeto_contrato:                   contract.contractObject || '',
             plazo_ejecucion:                   plazoEjecucionText,
             acta_parcial_anio:                 anio,
-            acta_parcial_mes:                  mes,
-            acta_parcial_dia:                  period.periodTo ? (parseDateSafe(period.periodTo)?.getDate().toString() || '') : '',
+            acta_parcial_mes:                  actaParcialMesNum,
+            acta_parcial_dia:                  actaParcialDia,
             numero_acta_parcial:               period.actNumber.toString(),
-            periodo_informado_inicio:          formatDateEs(period.periodFrom),
-            periodo_informado_fin:             formatDateEs(period.periodTo),
+            periodo_informado_inicio:          formatDateNumeric(period.periodFrom),
+            periodo_informado_fin:             formatDateNumeric(period.periodTo),
             actividades_desarrolladas:         formatActivitiesText(period.activities),
             evidencias_ejecucion:              formatEvidencesText(period.activities),
             anticipo:                          "0",
@@ -411,8 +431,8 @@ const generateBillingPackage = async (periodId, userId) => {
             entidad_pago_aportes:              period.securitySocial?.operator || 'SIMPLE',
             valor_total_aporte:                ssTotalFormatted,
             numero_recibo_aportes:             period.securitySocial?.planillaNumber || '',
-            periodo_cotizado_inicio:           formatDateEs(period.periodFrom),
-            periodo_cotizado_fin:              formatDateEs(period.periodTo),
+            periodo_cotizado_inicio:           formatDateNumeric(period.periodFrom),
+            periodo_cotizado_fin:              formatDateNumeric(period.periodTo),
             chk_recibo_pago_ss:                "[ X ]",
             chk_copias_planillas:              "[ X ]",
             chk_anexos_otros:                  "[   ]",
@@ -461,8 +481,8 @@ const generateBillingPackage = async (periodId, userId) => {
             supervisorDependency: contract.supervisorDependency || 'Secretaría de Planeación',
             contractorAddress: contract.contractorAddress || '',
             contractorPhone:   contract.contractorPhone   || '',
-            startDate:        contract.startDate ? formatDateEs(contract.startDate) : '',
-            endDate:          contract.endDate ? formatDateEs(contract.endDate) : '',
+            startDate:        contract.startDate ? formatDateNumeric(contract.startDate) : '',
+            endDate:          contract.endDate ? formatDateNumeric(contract.endDate) : '',
             periodMonthYear,
             chkApoyo,
             chkProfesional,
@@ -480,15 +500,15 @@ const generateBillingPackage = async (periodId, userId) => {
             cdpNumber:        periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
             rubro:            periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
             actNumber:        period.actNumber.toString(),
-            periodFrom:       formatDateEs(period.periodFrom),
-            periodTo:         formatDateEs(period.periodTo),
+            periodFrom:       formatDateNumeric(period.periodFrom),
+            periodTo:         formatDateNumeric(period.periodTo),
             mes,
             anio,
             hasAddition:       periodIsAddition,
             additionValue:     rawAddVal.toLocaleString('es-CO'),
             additionValueWord: contract.additionValueWord || '',
-            additionStartDate: contract.additionStartDate ? formatDateEs(contract.additionStartDate) : '',
-            additionEndDate:   contract.additionEndDate ? formatDateEs(contract.additionEndDate) : '',
+            additionStartDate: contract.additionStartDate ? formatDateNumeric(contract.additionStartDate) : '',
+            additionEndDate:   contract.additionEndDate ? formatDateNumeric(contract.additionEndDate) : '',
             additionCdp:       contract.additionCdp || '',
             additionRp:        contract.additionRp || '',
             additionRubro:     contract.additionRubro || '',
@@ -505,7 +525,7 @@ const generateBillingPackage = async (periodId, userId) => {
             bankName:         contract.bankName          || '',
             accountNumber:    contract.accountNumber     || '',
             paymentMethod:    contract.paymentMethod     || '',
-            periodToDate:     formatDateEs(period.periodTo),
+            periodToDate:     formatDateNumeric(period.periodTo),
             remainingValue:   remainingValFormatted,
             foliosContratista: "2",
             foliosSupervisor:  "1",
@@ -534,11 +554,20 @@ const generateBillingPackage = async (periodId, userId) => {
         };
 
         const fotos_evidencias = [];
-        (period.activities || []).forEach((act, i) => {
+        const lista_actividades = (period.activities || []).map((act, i) => {
             const code = act.obligationCode || `2.2.${i + 1}`;
+            const text = act.obligationText || '';
+            const comment = (act.comment && act.comment.trim().length > 0)
+                ? act.comment.trim()
+                : 'Actividades ejecutadas a satisfacción durante el periodo reportado.';
+
+            const fotos = [];
+            const documentos = [];
+
             if (act.evidences && act.evidences.length > 0) {
                 const photos = act.evidences.filter(isImageEvidence);
                 let photoIndex = 0;
+
                 act.evidences.forEach((ev) => {
                     if (isImageEvidence(ev) && ev.path) {
                         photoIndex++;
@@ -548,20 +577,55 @@ const generateBillingPackage = async (periodId, userId) => {
                             const titleSuffix = totalPhotos > 1 ? ` (Evidencia ${photoIndex} de ${totalPhotos})` : '';
                             const desc = (ev.description && ev.description.trim().length > 0)
                                 ? ev.description.trim()
-                                : (act.comment && act.comment.trim().length > 0
+                                : (act.comment && act.comment.trim().length > 0 && totalPhotos === 1
                                     ? act.comment.trim()
-                                    : (act.obligationText || `Soporte fotográfico de la obligación ${code}`));
+                                    : (act.obligationText || `Soporte fotográfico de la obligación ${code}${titleSuffix}`));
+
+                            fotos.push({
+                                descripcion: desc,
+                                foto: resolved
+                            });
+
                             fotos_evidencias.push({
                                 codigo: `${code}${titleSuffix}`,
                                 descripcion: desc,
                                 foto: resolved
                             });
                         }
+                    } else if (ev.filename || ev.path) {
+                        documentos.push({
+                            nombre: ev.filename || path.basename(ev.path || 'Documento adjunto')
+                        });
                     }
                 });
             }
+
+            return {
+                num: (i + 1).toString(),
+                codigo: code,
+                texto: text,
+                comentario: comment,
+                fotos,
+                tiene_fotos: fotos.length > 0,
+                documentos,
+                tiene_documentos: documentos.length > 0
+            };
         });
 
+        if (lista_actividades.length === 0) {
+            lista_actividades.push({
+                num: "1",
+                codigo: "2.1",
+                texto: "Ejecución de actividades contractuales",
+                comentario: "No se registraron actividades en el periodo reportado.",
+                fotos: [],
+                tiene_fotos: false,
+                documentos: [],
+                tiene_documentos: false
+            });
+        }
+
+        commonData.lista_actividades = lista_actividades;
         commonData.fotos_evidencias = fotos_evidencias;
         commonData.tiene_fotos_evidencias = fotos_evidencias.length > 0;
 

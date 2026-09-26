@@ -49,24 +49,38 @@ exports.generateDocument = async (templateName, data) => {
         let xmlText = docXml ? docXml.asText() : "";
         const hasDoubleBraces = /\{\{[^{}]+\}\}/.test(xmlText);
 
-        // If template is Informe de Actividades, inject the photo annex loop if not present
-        if (templateName.toUpperCase().includes('INFORME DE ACTIVIDADES') && !xmlText.includes('fotos_evidencias')) {
-            const target = '</w:tbl>';
-            if (xmlText.includes(target)) {
+        // If template is Informe de Actividades, embed obligations, comments and evidence images directly into the Actividades Desarrolladas cell
+        if (templateName.toUpperCase().includes('INFORME DE ACTIVIDADES')) {
+            if (xmlText.includes('actividades_desarrolladas')) {
                 const openLoop = hasDoubleBraces ? '{{#' : '{#';
                 const closeLoop = hasDoubleBraces ? '{{/' : '{/';
                 const openTag = hasDoubleBraces ? '{{' : '{';
                 const closeTag = hasDoubleBraces ? '}}' : '}';
 
-                const photoAnnexXml = '</w:tbl>' +
-                    '<w:p><w:pPr><w:spacing w:before="360" w:after="120"/><w:jc w:val="center"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="002060"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="002060"/></w:rPr><w:t>' + openLoop + 'tiene_fotos_evidencias' + closeTag + 'REGISTRO FOTOGRÁFICO DE ACTIVIDADES' + closeLoop + 'tiene_fotos_evidencias' + closeTag + '</w:t></w:r></w:p>' +
-                    '<w:p><w:r><w:t>' + openLoop + 'fotos_evidencias' + closeTag + '</w:t></w:r></w:p>' +
-                    '<w:p><w:pPr><w:spacing w:before="140" w:after="40"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>Obligación ' + openTag + 'codigo' + closeTag + ':</w:t></w:r></w:p>' +
-                    '<w:p><w:pPr><w:spacing w:before="40" w:after="80"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:color w:val="333333"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:color w:val="333333"/></w:rPr><w:t>' + openTag + 'descripcion' + closeTag + '</w:t></w:r></w:p>' +
-                    '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="60" w:after="200"/></w:pPr><w:r><w:t>' + openTag + '%foto' + closeTag + '</w:t></w:r></w:p>' +
-                    '<w:p><w:r><w:t>' + closeLoop + 'fotos_evidencias' + closeTag + '</w:t></w:r></w:p>';
-                xmlText = xmlText.replace(target, photoAnnexXml);
-                zip.file("word/document.xml", xmlText);
+                const tagIdx = xmlText.indexOf('actividades_desarrolladas');
+                const pStartBefore = xmlText.lastIndexOf('<w:p ', tagIdx);
+                const pStartBasic = xmlText.lastIndexOf('<w:p>', tagIdx);
+                const cellPStart = Math.max(pStartBefore, pStartBasic);
+                const cellPEnd = xmlText.indexOf('</w:p>', tagIdx) + '</w:p>'.length;
+
+                if (cellPStart !== -1 && cellPEnd > cellPStart) {
+                    const oldP = xmlText.substring(cellPStart, cellPEnd);
+                    const activitiesCellXml = 
+                        '<w:p><w:r><w:t>' + openLoop + 'lista_actividades' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:pPr><w:spacing w:before="140" w:after="40"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="20"/><w:szCs w:val="20"/><w:color w:val="002060"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="20"/><w:szCs w:val="20"/><w:color w:val="002060"/></w:rPr><w:t>Obligación ' + openTag + 'codigo' + closeTag + ': ' + openTag + 'texto' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:pPr><w:spacing w:before="40" w:after="80"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr><w:t>Actividad desarrollada: </w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr><w:t>' + openTag + 'comentario' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:r><w:t>' + openLoop + 'fotos' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:pPr><w:spacing w:before="60" w:after="40"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:color w:val="444444"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:color w:val="444444"/></w:rPr><w:t>• Evidencia: ' + openTag + 'descripcion' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="140"/></w:pPr><w:r><w:t>' + openTag + '%foto' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:r><w:t>' + closeLoop + 'fotos' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:r><w:t>' + openLoop + 'documentos' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:color w:val="555555"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/><w:color w:val="555555"/></w:rPr><w:t>• Documento soporte: ' + openTag + 'nombre' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:r><w:t>' + closeLoop + 'documentos' + closeTag + '</w:t></w:r></w:p>' +
+                        '<w:p><w:pPr><w:spacing w:before="80" w:after="120"/><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="8" w:color="D0D0D0"/></w:pBdr></w:pPr></w:p>' +
+                        '<w:p><w:r><w:t>' + closeLoop + 'lista_actividades' + closeTag + '</w:t></w:r></w:p>';
+                    xmlText = xmlText.replace(oldP, activitiesCellXml);
+                    zip.file("word/document.xml", xmlText);
+                }
             }
         }
 
