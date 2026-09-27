@@ -34,8 +34,6 @@ services:
       - backend_uploads:/app/uploads
       - backend_generated:/app/generated
       - backend_templates:/app/templates
-    depends_on:
-      - mongodb
     restart: unless-stopped
     deploy:
       resources:
@@ -50,8 +48,6 @@ services:
       - "80:80"
       - "5173:80"
       - "3000:80"
-    depends_on:
-      - backend
     restart: unless-stopped
     deploy:
       resources:
