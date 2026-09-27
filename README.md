@@ -16,7 +16,7 @@ El proyecto está diseñado y optimizado para ejecutarse tanto en **entornos de 
 
 ---
 
-## 🍓 Guía de Despliegue en Producción (Raspberry Pi 3)
+## Guía de Despliegue en Producción (Raspberry Pi 3)
 
 Sigue estos pasos detallados para instalar y poner en marcha el sistema en una Raspberry Pi 3 con Raspberry Pi OS.
 

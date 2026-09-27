@@ -3,6 +3,7 @@ const path = require('path');
 const User = require('../models/User');
 const Contract = require('../models/Contract');
 const BillingPeriod = require('../models/BillingPeriod');
+const TelegramPrivilege = require('../models/TelegramPrivilege');
 const geminiService = require('./gemini.service');
 const { generateBillingPackage } = require('../controllers/billing.controller');
 const { calculatePeriods, filterSpecificObligations, isGeneralObligation, getContractDurationText } = require('../utils/period.utils');
@@ -234,15 +235,124 @@ const sendTelegramDocument = async (chatId, filePath, caption) => {
 };
 
 /**
+ * Verifies monetization and access rights for an Act/BillingPeriod.
+ * - Act 1: 100% Free for everyone (Bienvenida / Free Trial).
+ * - Act 2+: Requires payment, OR exemption, OR provider monthly quota.
+ */
+const checkPeriodAccess = async (chatId, activeUser, actNumber, period = null) => {
+    // Act 1 is always FREE (Bienvenida / Primera cuenta sin costo)
+    if (actNumber === 1) {
+        return {
+            allowed: true,
+            reason: 'free_trial',
+            badge: '1ª Cuenta (Gratis)'
+        };
+    }
+
+    // Check if the chat is an active Telegram Operator Privilege
+    const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+    if (privilege) {
+        // 1. Exempt Operator (100% Free / Unlimited)
+        if (privilege.operatorType === 'exempt') {
+            return {
+                allowed: true,
+                reason: 'exempt_operator',
+                badge: 'Operador Exento (Sin Costo)',
+                privilege
+            };
+        }
+
+        // 2. Provider with Preferential Rate and Monthly Limit
+        if (privilege.operatorType === 'provider') {
+            const now = new Date();
+            const currentCycle = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+            // Reset monthly usage if new calendar month
+            if (privilege.currentMonthCycle !== currentCycle) {
+                privilege.currentMonthCycle = currentCycle;
+                privilege.accountsUsedThisMonth = 0;
+                await privilege.save();
+            }
+
+            const limit = privilege.monthlyAccountsLimit || 15;
+            const used = privilege.accountsUsedThisMonth || 0;
+
+            if (used < limit) {
+                return {
+                    allowed: true,
+                    reason: 'provider',
+                    badge: `Proveedor (${used}/${limit} este mes)`,
+                    privilege
+                };
+            } else {
+                return {
+                    allowed: false,
+                    reason: 'provider_limit',
+                    message: `*Límite Mensual de Cuentas Completado*\n\nHas alcanzado tu cupo de *${limit} cuentas de cobro* disponibles para este mes (${currentCycle}).\n\nTarifa preferencial asignada: *$ ${Number(privilege.preferentialRate || 20000).toLocaleString('es-CO')}*\n\nPara ampliar tu cupo o renovar el paquete mensual, comunícate con el Administrador Maestro.`
+                };
+            }
+        }
+    }
+
+    // Check if contractor is marked as payment exempt (VIP)
+    if (activeUser && activeUser.isPaymentExempt) {
+        return {
+            allowed: true,
+            reason: 'exempt_user',
+            badge: 'Funcionario Exento'
+        };
+    }
+
+    // Check if period is already paid/enabled
+    if (period && (period.isPaid || period.paymentStatus === 'paid' || period.paymentStatus === 'exempt')) {
+        return {
+            allowed: true,
+            reason: 'paid',
+            badge: 'Cuenta Habilitada'
+        };
+    }
+
+    // Otherwise, Act 2+ requires payment for regular contractors
+    return {
+        allowed: false,
+        reason: 'payment_required',
+        message: `*Habilitación de Cuenta N° ${actNumber} Requerida*\n\nCompletaste tu primera cuenta de cobro de cortesía.\n\nPara diligenciar las evidencias y generar tu *Acta N° ${actNumber}* (y subsiguientes), debes habilitar el periodo mediante el pago correspondiente.\n\n*Tarifa de habilitación:* $ 25.000 COP\n*Medios de pago disponibles:*\n• Bancolombia / A la Mano\n• Nequi / Daviplata\n\nPor favor envía tu comprobante de pago o comunícate con el Administrador para habilitar tu Acta N° ${actNumber}.`
+    };
+};
+
+/**
  * Generates all 4 Word docs + ZIP package and sends it via Telegram
  */
 const handleGenerateAndDownload = async (chatId, user, periodId) => {
     try {
+        const periodCheck = await BillingPeriod.findById(periodId);
+        if (periodCheck && periodCheck.actNumber > 1) {
+            const access = await checkPeriodAccess(chatId, user, periodCheck.actNumber, periodCheck);
+            if (!access.allowed) {
+                await sendTelegramMessage(chatId, access.message);
+                return;
+            }
+        }
+
         await sendTelegramMessage(chatId, '⚙️ Generando tus 4 formatos oficiales (Informe de Actividades, Certificación del Supervisor, Retención en la Fuente, Estampillas) y empaquetando soportes...');
 
         const { period, zipPath } = await generateBillingPackage(periodId, user._id);
 
         if (zipPath && fs.existsSync(zipPath)) {
+            // Count towards provider monthly usage if applicable
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege && privilege.operatorType === 'provider') {
+                const now = new Date();
+                const currentCycle = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                if (privilege.currentMonthCycle !== currentCycle) {
+                    privilege.currentMonthCycle = currentCycle;
+                    privilege.accountsUsedThisMonth = 1;
+                } else {
+                    privilege.accountsUsedThisMonth = (privilege.accountsUsedThisMonth || 0) + 1;
+                }
+                await privilege.save();
+            }
+
             await sendTelegramMessage(chatId, `📦 ¡Paquete de Cobro generado con éxito para el Acta N° ${period.actNumber}! Enviando archivo ZIP...`);
             await sendTelegramDocument(chatId, zipPath, `Cuenta de Cobro - Acta ${period.actNumber}`);
 
@@ -260,12 +370,337 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
 };
 
 /**
+ * Retrieves all active contracts for a user
+ */
+const getUserContracts = async (userId) => {
+    return await Contract.find({ user: userId, status: { $ne: 'archived' } }).sort({ createdAt: -1 });
+};
+
+/**
+ * Resolves the currently active User for this chat.
+ * If in operator mode, returns the selected funcionario.
+ * Otherwise returns the linked User for this chatId.
+ */
+const resolveActiveUser = async (chatId) => {
+    const session = sessions.get(chatId);
+    if (session && session.activeUserId) {
+        const user = await User.findById(session.activeUserId);
+        if (user) return user;
+    }
+    if (session && session.userId) {
+        const user = await User.findById(session.userId);
+        if (user) return user;
+    }
+    return await User.findOne({ telegramChatId: chatId });
+};
+
+/**
+ * Returns a prominent visual header banner for the active contract and operator status
+ */
+const getContractBanner = (contract, chatId = null) => {
+    let header = '';
+    if (chatId) {
+        const session = sessions.get(chatId);
+        if (session && session.isOperator && session.operatorLabel) {
+            header += `🛡️ OPERADOR: ${session.operatorLabel}\n`;
+        }
+    }
+    if (contract) {
+        const contractor = contract.contractorName ? ` | ${contract.contractorName}` : '';
+        const num = contract.contractNumber || 'En trámite';
+        const entity = contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia';
+        const sup = contract.supervisorName || 'No asignado';
+        header += `📌 CONTRATO: ${num}${contractor}\n🏛️ ${entity} | Supervisor: ${sup}\n`;
+    }
+    if (header) {
+        header += `──────────────────────\n`;
+    }
+    return header;
+};
+
+/**
+ * Resolves the active contract for the session and user.
+ * If user has multiple contracts and none is explicitly selected, returns null so selection menu can be triggered.
+ */
+const resolveActiveContract = async (chatId, user) => {
+    const session = sessions.get(chatId);
+    if (session && session.activeContractId) {
+        const contract = await Contract.findById(session.activeContractId);
+        if (contract && contract.user.toString() === user._id.toString()) {
+            return contract;
+        }
+    }
+    const contracts = await getUserContracts(user._id);
+    if (contracts.length === 1) {
+        if (session) {
+            session.activeContractId = contracts[0]._id;
+            sessions.set(chatId, session);
+        } else {
+            sessions.set(chatId, { activeContractId: contracts[0]._id });
+        }
+        return contracts[0];
+    }
+    return null;
+};
+
+/**
+ * Displays the menu of available funcionarios for a privileged Telegram operator
+ */
+const showOperatorFuncionarioMenu = async (chatId, privilege, page = 0, editMessageId = null) => {
+    try {
+        let allowedUsers = [];
+        if (privilege.scope === 'all') {
+            allowedUsers = await User.find({ role: { $ne: 'admin' } }).sort({ fullName: 1 });
+        } else {
+            const ids = Array.isArray(privilege.assignedUsers) ? privilege.assignedUsers : [];
+            allowedUsers = await User.find({ _id: { $in: ids }, role: { $ne: 'admin' } }).sort({ fullName: 1 });
+        }
+
+        const contracts = await Contract.find().sort({ createdAt: -1 });
+        const contractMap = new Map();
+        contracts.forEach(c => {
+            if (c.user && !contractMap.has(c.user.toString())) {
+                contractMap.set(c.user.toString(), c);
+            }
+        });
+
+        if (allowedUsers.length === 0) {
+            const emptyMsg = `🛡️ MODO OPERADOR: ${privilege.label}\n\n⚠️ No se encontraron funcionarios disponibles para gestionar.\n\n${privilege.scope === 'specific' ? 'No tienes funcionarios asignados en tu lista. Solicita al Administrador Maestro que te asigne funcionarios desde el panel web.' : 'Aún no hay contratistas registrados en el sistema.'}`;
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, emptyMsg);
+            } else {
+                await sendTelegramMessage(chatId, emptyMsg);
+            }
+            return;
+        }
+
+        const pageSize = 8;
+        const totalPages = Math.ceil(allowedUsers.length / pageSize);
+        const currentPage = Math.min(Math.max(0, page), totalPages - 1);
+        const startIdx = currentPage * pageSize;
+        const pageUsers = allowedUsers.slice(startIdx, startIdx + pageSize);
+
+        let text = `🛡️ MODO OPERADOR: ${privilege.label}\n`;
+        text += `🌐 Alcance: ${privilege.scope === 'all' ? 'Todos los funcionarios (Acceso Maestro)' : `${allowedUsers.length} funcionario(s) asignado(s)`}\n\n`;
+        text += `👥 Selecciona el funcionario con el que deseas trabajar:\n\n`;
+
+        const keyboard = [];
+
+        pageUsers.forEach((u) => {
+            const c = contractMap.get(u._id.toString());
+            const cedula = c?.idNumber || 'Sin C.C.';
+            const entity = c?.entityName || c?.supervisorDependency || '';
+            const shortEntity = entity.length > 15 ? entity.substring(0, 15) + '...' : entity;
+            const labelText = `👤 ${u.fullName} (${cedula})`;
+
+            text += `• ${u.fullName}\n   🪪 C.C. ${cedula}${shortEntity ? ` | ${shortEntity}` : ''}\n`;
+
+            keyboard.push([{
+                text: labelText,
+                callback_data: `sel_op_user_${u._id}`
+            }]);
+        });
+
+        text += `\n💡 O escribe directamente el número de cédula del funcionario en cualquier momento.`;
+
+        // Pagination buttons
+        if (totalPages > 1) {
+            const navRow = [];
+            if (currentPage > 0) {
+                navRow.push({ text: '⬅️ Anterior', callback_data: `op_page_${currentPage - 1}` });
+            }
+            navRow.push({ text: `Pág ${currentPage + 1}/${totalPages}`, callback_data: 'noop' });
+            if (currentPage < totalPages - 1) {
+                navRow.push({ text: 'Siguiente ➡️', callback_data: `op_page_${currentPage + 1}` });
+            }
+            keyboard.push(navRow);
+        }
+
+        if (editMessageId) {
+            await editTelegramMessage(chatId, editMessageId, text, keyboard);
+        } else {
+            await sendTelegramKeyboardMessage(chatId, text, keyboard);
+        }
+    } catch (err) {
+        console.error('Error en showOperatorFuncionarioMenu:', err);
+        await sendTelegramMessage(chatId, '❌ Error al listar los funcionarios.');
+    }
+};
+
+/**
+ * Activates an operator's session for a specific funcionario
+ */
+const selectOperatorUser = async (chatId, privilege, userId, editMessageId = null) => {
+    try {
+        const user = await User.findById(userId);
+        if (!user) {
+            await sendTelegramMessage(chatId, '⚠️ Funcionario no encontrado.');
+            return;
+        }
+
+        // Verify scope permissions
+        if (privilege.scope === 'specific') {
+            const isAssigned = (privilege.assignedUsers || []).some(id => id.toString() === userId.toString());
+            if (!isAssigned) {
+                await sendTelegramMessage(chatId, '⚠️ No tienes permisos asignados para gestionar a este funcionario.');
+                return;
+            }
+        }
+
+        const contracts = await getUserContracts(user._id);
+
+        const session = sessions.get(chatId) || {};
+        session.isOperator = true;
+        session.operatorLabel = privilege.label;
+        session.privilegeId = privilege._id;
+        session.activeUserId = user._id;
+        session.userId = user._id;
+        session.state = 'identified';
+        sessions.set(chatId, session);
+
+        privilege.lastActiveAt = new Date();
+        await privilege.save();
+
+        if (contracts.length > 1) {
+            let reply = `🛡️ MODO OPERADOR: ${privilege.label}\n\n`;
+            reply += `✅ Has seleccionado al funcionario: ${user.fullName}\n`;
+            reply += `🏛️ Tiene ${contracts.length} contratos registrados en el sistema.\n`;
+            reply += `Por favor selecciona con cuál contrato deseas trabajar:`;
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, reply);
+            } else {
+                await sendTelegramMessage(chatId, reply);
+            }
+            await showContractSelectionMenu(chatId, user);
+            return;
+        }
+
+        const contract = contracts[0] || null;
+        if (contract) {
+            session.activeContractId = contract._id;
+            session.contractId = contract._id;
+            sessions.set(chatId, session);
+        }
+
+        let reply = `🛡️ MODO OPERADOR: ${privilege.label}\n`;
+        reply += `━━━━━━━━━━━━━━━━━━━━\n`;
+        reply += `👤 FUNCIONARIO ACTIVO: ${user.fullName}\n`;
+        reply += `🪪 Cédula: ${contract?.idNumber || 'Sin cédula'}\n`;
+        reply += `📋 Contrato: ${contract?.contractNumber || 'En trámite'}\n`;
+        reply += `🏛️ Entidad: ${contract?.entityName || contract?.supervisorDependency || 'Alcaldía de Armenia'}\n`;
+        reply += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+        if (!contract || !contract.activities || contract.activities.length === 0) {
+            reply += `⚠️ Este funcionario aún no tiene obligaciones contractuales cargadas.\n¿Deseas cargar los documentos de su contrato (Minuta, Acta de Inicio, RP, RUT, etc.)?`;
+            const keyboard = [
+                [{ text: '📄 Cargar Documentos de Contrato', callback_data: 'start_docs_flow' }],
+                [{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]
+            ];
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, reply, keyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, reply, keyboard);
+            }
+        } else {
+            reply += `¿Qué deseas gestionar para ${user.fullName}?`;
+            const keyboard = [
+                [{ text: '📂 Subir Evidencias', callback_data: 'subir_evidencia' }],
+                [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+                [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+                [{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]
+            ];
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, reply, keyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, reply, keyboard);
+            }
+        }
+    } catch (err) {
+        console.error('Error en selectOperatorUser:', err);
+        await sendTelegramMessage(chatId, '❌ Error al seleccionar funcionario.');
+    }
+};
+
+/**
+ * Interactive menu to let contractors select which contract to work on
+ */
+const showContractSelectionMenu = async (chatId, user, editMessageId = null) => {
+    try {
+        const contracts = await getUserContracts(user._id);
+
+        if (contracts.length === 0) {
+            const emptyMsg = `⚠️ No tienes contratos registrados en el sistema.\n\nPuedes presionar el botón abajo para registrar tu primer contrato cargando su minuta:`;
+            const keyboard = [
+                [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+            ];
+            if (sessions.get(chatId)?.isOperator) {
+                keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+            }
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, emptyMsg, keyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, emptyMsg, keyboard);
+            }
+            return;
+        }
+
+        const isOp = sessions.get(chatId)?.isOperator;
+        let text = isOp ? `🛡️ MODO OPERADOR: ${sessions.get(chatId)?.operatorLabel || ''}\n👤 Funcionario: ${user.fullName}\n\n` : '';
+        text += `🏛️ Selección de Contrato\n\n`;
+        text += `Funcionario: ${user.fullName} tiene ${contracts.length} contrato(s) registrado(s) en el sistema.\n\n`;
+        text += `👉 Selecciona el contrato con el que deseas trabajar:\n\n`;
+
+        const keyboard = [];
+
+        contracts.forEach((c, idx) => {
+            const num = c.contractNumber || 'En trámite';
+            const entity = c.entityName || c.supervisorDependency || 'Alcaldía';
+            const icon = idx === 0 ? '1️⃣' : idx === 1 ? '2️⃣' : idx === 2 ? '3️⃣' : '📄';
+            text += `${icon} Contrato N° ${num}\n`;
+            text += `   🏢 Entidad: ${entity}\n`;
+            text += `   👤 Supervisor: ${c.supervisorName || 'No asignado'}\n\n`;
+
+            const shortEntity = entity.length > 22 ? entity.substring(0, 22) + '...' : entity;
+            keyboard.push([{
+                text: `${icon} ${num} | ${shortEntity}`,
+                callback_data: `select_contract_${c._id}`
+            }]);
+        });
+
+        keyboard.push([
+            { text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }
+        ]);
+
+        if (isOp) {
+            keyboard.push([
+                { text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }
+            ]);
+        }
+
+        if (editMessageId) {
+            await editTelegramMessage(chatId, editMessageId, text, keyboard);
+        } else {
+            await sendTelegramKeyboardMessage(chatId, text, keyboard);
+        }
+    } catch (err) {
+        console.error('Error en showContractSelectionMenu:', err);
+        await sendTelegramMessage(chatId, '❌ Error al cargar la lista de contratos.');
+    }
+};
+
+/**
  * Renders the Act Selection Menu
  */
 const showActsMenu = async (chatId, user, editMessageId = null) => {
     try {
-        const contract = await Contract.findOne({ user: user._id });
+        const contract = await resolveActiveContract(chatId, user);
         if (!contract) {
+            const contracts = await getUserContracts(user._id);
+            if (contracts.length > 1) {
+                await showContractSelectionMenu(chatId, user, editMessageId);
+                return;
+            }
             const msg = '⚠️ Sin contrato configurado. Puedes enviar los documentos de tu contrato escribiendo /documentos para comenzar.';
             if (editMessageId) {
                 await editTelegramMessage(chatId, editMessageId, msg);
@@ -283,20 +718,29 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
             contract.endDate
         );
 
-        const existingPeriods = await BillingPeriod.find({ user: user._id });
+        const existingPeriods = await BillingPeriod.find({
+            user: user._id,
+            $or: [{ contract: contract._id }, { contract: null }]
+        });
 
-        let text = '📂 Gestion de Evidencias\n\nSelecciona el numero de Acta de Cobro para la cual deseas cargar evidencias y comentarios:';
+        const banner = getContractBanner(contract);
+        let text = `${banner}📂 Gestión de Evidencias\n\nSelecciona el número de Acta de Cobro para la cual deseas cargar evidencias y comentarios:`;
         const keyboard = [];
 
         for (const p of periods) {
             const existing = existingPeriods.find(ep => ep.actNumber === p.actNumber);
+            const access = await checkPeriodAccess(chatId, user, p.actNumber, existing);
             let statusLabel = '';
+
             if (existing) {
                 if (existing.status === 'approved') statusLabel = ' (Aprobada)';
                 else if (existing.status === 'rejected') statusLabel = ' (Rechazada)';
+                else if (!access.allowed) statusLabel = ' (Pago Requerido)';
                 else statusLabel = ' (Borrador)';
             } else {
-                statusLabel = ' (Sin iniciar)';
+                if (p.actNumber === 1) statusLabel = ' (1ª Gratuita)';
+                else if (!access.allowed) statusLabel = ' (Pago Requerido)';
+                else statusLabel = ' (Sin iniciar)';
             }
 
             keyboard.push([{
@@ -304,6 +748,10 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
                 callback_data: `select_act_${p.actNumber}`
             }]);
         }
+
+        keyboard.push([
+            { text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }
+        ]);
 
         if (editMessageId) {
             await editTelegramMessage(chatId, editMessageId, text, keyboard);
@@ -321,8 +769,13 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
  */
 const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
     try {
-        const contract = await Contract.findOne({ user: user._id });
+        const contract = await resolveActiveContract(chatId, user);
         if (!contract) {
+            const contracts = await getUserContracts(user._id);
+            if (contracts.length > 1) {
+                await showContractSelectionMenu(chatId, user, editMessageId);
+                return;
+            }
             await sendTelegramMessage(chatId, '⚠️ No se encontró tu contrato.');
             return;
         }
@@ -345,6 +798,7 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
 
         let period = await BillingPeriod.findOne({
             user: user._id,
+            contract: contract._id,
             actNumber: actNumber,
             status: 'pending'
         });
@@ -352,8 +806,23 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         if (!period) {
             period = await BillingPeriod.findOne({
                 user: user._id,
+                contract: contract._id,
                 actNumber: actNumber
             });
+        }
+
+        // Backwards compatibility for periods created before multi-contract (where contract was null)
+        if (!period) {
+            const legacyPeriod = await BillingPeriod.findOne({
+                user: user._id,
+                actNumber: actNumber,
+                contract: null
+            });
+            if (legacyPeriod) {
+                legacyPeriod.contract = contract._id;
+                await legacyPeriod.save();
+                period = legacyPeriod;
+            }
         }
 
         const buildInitialActivities = () => {
@@ -370,13 +839,17 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         };
 
         if (!period) {
+            const isAct1 = actNumber === 1;
             period = await BillingPeriod.create({
                 user: user._id,
+                contract: contract._id,
                 actNumber: actNumber,
                 periodFrom: new Date(periodInfo.from + 'T00:00:00'),
                 periodTo: new Date(periodInfo.to + 'T23:59:59'),
                 activities: buildInitialActivities(),
                 status: 'pending',
+                isPaid: isAct1 || Boolean(user.isPaymentExempt),
+                paymentStatus: user.isPaymentExempt ? 'exempt' : (isAct1 ? 'free_trial' : 'pending_payment'),
                 securitySocial: {
                     operator: '',
                     planillaNumber: '',
@@ -390,8 +863,32 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         }
 
         if (period.status === 'approved') {
-            const text = `⚠️ El Acta N. ${actNumber} ya ha sido Aprobada y no se puede modificar.\n\nPor favor selecciona otra acta.`;
-            const keyboard = [[{ text: 'Volver a las Actas', callback_data: 'go_back_acts' }]];
+            const banner = getContractBanner(contract);
+            const text = `${banner}⚠️ El Acta N. ${actNumber} ya ha sido Aprobada y no se puede modificar.\n\nPor favor selecciona otra acta.`;
+            const keyboard = [
+                [{ text: 'Volver a las Actas', callback_data: 'go_back_acts' }],
+                [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
+            ];
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, text, keyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, text, keyboard);
+            }
+            return;
+        }
+
+        // Check monetization & payment access
+        const access = await checkPeriodAccess(chatId, user, actNumber, period);
+        if (!access.allowed) {
+            const banner = getContractBanner(contract, chatId);
+            const text = `${banner}\n${access.message}`;
+            const keyboard = [
+                [{ text: '📁 Volver a las Actas', callback_data: 'show_acts_menu' }],
+                [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
+            ];
+            if (sessions.get(chatId)?.isOperator) {
+                keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+            }
             if (editMessageId) {
                 await editTelegramMessage(chatId, editMessageId, text, keyboard);
             } else {
@@ -415,11 +912,14 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         }
 
         if (!period.activities || period.activities.length === 0) {
-            const emptyMsg = '⚠️ Tu contrato aún no tiene obligaciones registradas en el sistema.\n\nPuedes subir la minuta de tu contrato escribiendo /documentos para extraerlas automáticamente.';
+            const emptyMsg = `⚠️ El Contrato N° ${contract.contractNumber || 'registrado'} aún no tiene obligaciones registradas en el sistema.\n\nPuedes subir la minuta escribiendo /documentos para extraerlas automáticamente.`;
+            const keyboard = [
+                [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
+            ];
             if (editMessageId) {
-                await editTelegramMessage(chatId, editMessageId, emptyMsg);
+                await editTelegramMessage(chatId, editMessageId, emptyMsg, keyboard);
             } else {
-                await sendTelegramMessage(chatId, emptyMsg);
+                await sendTelegramKeyboardMessage(chatId, emptyMsg, keyboard);
             }
             return;
         }
@@ -427,10 +927,11 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         const fromStr = period.periodFrom ? period.periodFrom.toISOString().split('T')[0] : periodInfo.from;
         const toStr = period.periodTo ? period.periodTo.toISOString().split('T')[0] : periodInfo.to;
 
-        let text = `📋 ¿Para cuál obligación es a la que se le va a subir dicha evidencia?\n\n`;
+        const banner = getContractBanner(contract);
+        let text = `${banner}📋 ¿Para cuál obligación es a la que se le va a subir dicha evidencia?\n\n`;
         text += `Acta de Cobro N. ${actNumber} (Periodo: ${fromStr} al ${toStr})\n`;
         text += `──────────────────────\n`;
-        text += `Lista de obligaciones de tu contrato/minuta:\n\n`;
+        text += `Lista de obligaciones del contrato:\n\n`;
 
         const keyboard = [];
 
@@ -462,7 +963,8 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
             { text: '📊 Resumen del Acta', callback_data: `summary_${period._id}` }
         ]);
         keyboard.push([
-            { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' }
+            { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' },
+            { text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }
         ]);
 
         text += `👉 Toca el botón de la obligación o escribe su número (ej: 1, 2, 3...):`;
@@ -470,7 +972,8 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         sessions.set(chatId, {
             state: 'awaiting_obligation_selection',
             periodId: period._id,
-            actNumber: actNumber
+            actNumber: actNumber,
+            activeContractId: contract._id
         });
 
         if (editMessageId) {
@@ -488,9 +991,24 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
  * Resolves current active act and presents obligations
  */
 const showObligationsFlow = async (chatId, user, editMessageId = null, forcedActNumber = null) => {
+    const contract = await resolveActiveContract(chatId, user);
+    if (!contract) {
+        const contracts = await getUserContracts(user._id);
+        if (contracts.length > 1) {
+            await showContractSelectionMenu(chatId, user, editMessageId);
+            return;
+        }
+        await sendTelegramMessage(chatId, '⚠️ Sin contrato configurado. Escribe /documentos para comenzar.');
+        return;
+    }
+
     let actNumber = forcedActNumber;
     if (!actNumber) {
-        const activePeriod = await BillingPeriod.findOne({ user: user._id, status: 'pending' }).sort({ actNumber: 1 });
+        const activePeriod = await BillingPeriod.findOne({
+            user: user._id,
+            $or: [{ contract: contract._id }, { contract: null }],
+            status: 'pending'
+        }).sort({ actNumber: 1 });
         actNumber = activePeriod ? activePeriod.actNumber : 1;
     }
     await selectActFlow(chatId, user, actNumber, editMessageId);
@@ -507,6 +1025,14 @@ const selectObligationFlow = async (chatId, user, periodId, index, editMessageId
             return;
         }
 
+        const contract = period.contract ? await Contract.findById(period.contract) : await resolveActiveContract(chatId, user);
+
+        const access = await checkPeriodAccess(chatId, user, period.actNumber, period);
+        if (!access.allowed) {
+            await sendTelegramMessage(chatId, access.message);
+            return;
+        }
+
         const act = period.activities[index];
         if (!act) {
             await sendTelegramMessage(chatId, '⚠️ Obligación no encontrada.');
@@ -516,10 +1042,12 @@ const selectObligationFlow = async (chatId, user, periodId, index, editMessageId
         sessions.set(chatId, {
             state: 'awaiting_comment',
             periodId: periodId,
-            obligationIndex: index
+            obligationIndex: index,
+            activeContractId: contract ? contract._id : null
         });
 
-        let text = `📌 Obligación ${index + 1} (${act.obligationCode}):\n\n`;
+        const banner = contract ? getContractBanner(contract) : '';
+        let text = `${banner}📌 Obligación ${index + 1} (${act.obligationCode}):\n\n`;
         text += `"${act.obligationText}"\n\n`;
         
         if (act.comment) {
@@ -563,11 +1091,14 @@ const showPeriodSummary = async (chatId, periodId, editMessageId = null) => {
             return;
         }
 
+        const contract = period.contract ? await Contract.findById(period.contract) : await Contract.findOne({ user: period.user }).sort({ createdAt: -1 });
+        const banner = contract ? getContractBanner(contract) : '';
+
         const totalCount = period.activities.length;
         const readyCount = period.activities.filter(a => a.comment && a.evidences && a.evidences.length > 0).length;
         const partialCount = period.activities.filter(a => (a.comment || (a.evidences && a.evidences.length > 0)) && !(a.comment && a.evidences && a.evidences.length > 0)).length;
 
-        let text = `Resumen de Carga - Acta N. ${period.actNumber}\n\n`;
+        let text = `${banner}Resumen de Carga - Acta N. ${period.actNumber}\n\n`;
         text += `Periodo: ${period.periodFrom.toISOString().split('T')[0]} al ${period.periodTo.toISOString().split('T')[0]}\n`;
         text += `Estado: ${period.status.toUpperCase()}\n\n`;
         text += `Avance de Obligaciones:\n`;
@@ -609,7 +1140,8 @@ const showPeriodSummary = async (chatId, periodId, editMessageId = null) => {
             { text: '📋 Ver Obligaciones', callback_data: `select_act_${period.actNumber}` }
         ]);
         keyboard.push([
-            { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' }
+            { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' },
+            { text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }
         ]);
 
         if (editMessageId) {
@@ -748,6 +1280,13 @@ const promptPeriodPlanilla = async (chatId, periodId) => {
             return;
         }
 
+        const activeUser = await resolveActiveUser(chatId);
+        const access = await checkPeriodAccess(chatId, activeUser, period.actNumber, period);
+        if (!access.allowed) {
+            await sendTelegramMessage(chatId, access.message);
+            return;
+        }
+
         sessions.set(chatId, {
             state: 'awaiting_period_planilla',
             periodId: period._id,
@@ -781,10 +1320,11 @@ const promptPeriodPlanilla = async (chatId, periodId) => {
  */
 const finishDocsFlow = async (chatId, user) => {
     try {
-        const contract = await Contract.findOne({ user: user._id });
+        const contract = await resolveActiveContract(chatId, user) || await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
         sessions.set(chatId, {
             state: 'identified',
             userId: user._id,
+            activeContractId: contract ? contract._id : null,
             contractId: contract ? contract._id : null,
             cedula: contract ? contract.idNumber : ''
         });
@@ -795,6 +1335,7 @@ const finishDocsFlow = async (chatId, user) => {
         summaryMsg += `• Funcionario: ${contract ? (contract.contractorName || user.fullName) : user.fullName}\n`;
         summaryMsg += `• Cédula: ${contract ? (contract.idNumber || 'N/A') : 'N/A'}\n`;
         summaryMsg += `• Contrato N°: ${contract && contract.contractNumber ? contract.contractNumber : 'Pendiente'}\n`;
+        summaryMsg += `• Entidad: ${contract ? (contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia') : 'Alcaldía de Armenia'}\n`;
         summaryMsg += `• Fecha Inicio: ${contract && contract.startDate ? contract.startDate.split('T')[0] : 'Pendiente'}\n`;
         summaryMsg += `• Fecha Fin: ${contract && contract.endDate ? contract.endDate.split('T')[0] : 'Pendiente'}\n`;
         summaryMsg += `• Plazo / Duración: ${getContractDurationText(contract)}\n`;
@@ -816,7 +1357,8 @@ const finishDocsFlow = async (chatId, user) => {
             [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
             [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
             [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
-            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
+            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+            [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
         ]);
     } catch (err) {
         console.error('Error en finishDocsFlow:', err);
@@ -864,7 +1406,35 @@ const handleCallbackQuery = async (callbackQuery) => {
         }
     }
 
-    let user = await User.findOne({ telegramChatId: chatId });
+    // Operator Specific Callbacks
+    if (data === 'noop') {
+        return;
+    }
+    if (data === 'operator_switch_user' || data === 'switch_operator_user') {
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (privilege) {
+            await showOperatorFuncionarioMenu(chatId, privilege, 0, messageId);
+            return;
+        }
+    }
+    if (data.startsWith('op_page_')) {
+        const page = parseInt(data.replace('op_page_', ''), 10) || 0;
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (privilege) {
+            await showOperatorFuncionarioMenu(chatId, privilege, page, messageId);
+            return;
+        }
+    }
+    if (data.startsWith('sel_op_user_')) {
+        const targetUserId = data.replace('sel_op_user_', '');
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (privilege) {
+            await selectOperatorUser(chatId, privilege, targetUserId, messageId);
+            return;
+        }
+    }
+
+    let user = await resolveActiveUser(chatId);
     if (!user) {
         const session = sessions.get(chatId);
         if (session && session.userId) {
@@ -911,7 +1481,80 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 
     if (!user) {
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (privilege) {
+            await showOperatorFuncionarioMenu(chatId, privilege, 0, messageId);
+            return;
+        }
         await sendTelegramMessage(chatId, '⚠️ Tu cuenta no está asociada. Envía un saludo (hola) para identificarte o registrarte.');
+        return;
+    }
+
+    // Multi-Contract Switching & Creation Callbacks
+    if (data === 'switch_contract' || data === 'show_contracts_menu') {
+        await showContractSelectionMenu(chatId, user, messageId);
+        return;
+    } else if (data.startsWith('select_contract_')) {
+        const contractId = data.replace('select_contract_', '');
+        const contract = await Contract.findById(contractId);
+        if (!contract || contract.user.toString() !== user._id.toString()) {
+            await sendTelegramMessage(chatId, '⚠️ Contrato no encontrado o no pertenece a tu usuario.');
+            return;
+        }
+
+        const session = sessions.get(chatId) || {};
+        session.activeContractId = contract._id;
+        session.contractId = contract._id;
+        session.state = 'idle';
+        sessions.set(chatId, session);
+
+        let msg = `✅ Contrato Seleccionado:\n\n`;
+        msg += `📌 Contrato N°: ${contract.contractNumber || 'En trámite'}\n`;
+        msg += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n`;
+        msg += `👤 Supervisor: ${contract.supervisorName || 'No asignado'}\n`;
+        msg += `📅 Vigencia: ${contract.startDate ? contract.startDate.split('T')[0] : 'N/A'} al ${contract.endDate ? contract.endDate.split('T')[0] : 'N/A'}\n`;
+        msg += `⏱️ Plazo: ${getContractDurationText(contract)}\n`;
+        msg += `📝 Obligaciones: ${contract.activities ? contract.activities.length : 0} registradas\n\n`;
+        msg += `¿Qué deseas gestionar para este contrato?`;
+
+        const keyboard = [
+            [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+            [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
+        ];
+
+        if (sessions.get(chatId)?.isOperator) {
+            keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+        } else {
+            keyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+        }
+
+        if (messageId) {
+            await editTelegramMessage(chatId, messageId, msg, keyboard);
+        } else {
+            await sendTelegramKeyboardMessage(chatId, msg, keyboard);
+        }
+        return;
+    } else if (data === 'add_new_contract') {
+        sessions.set(chatId, {
+            state: 'awaiting_new_contract_minuta',
+            userId: user._id
+        });
+        let msg = `📄 Registro de Nuevo Contrato\n\n`;
+        msg += `Por favor, adjunta en este momento el archivo PDF de la minuta del nuevo contrato (o acta de inicio).\n\n`;
+        msg += `🤖 La Inteligencia Artificial analizará el documento, identificará la entidad (Alcaldía / Gobernación / Secretaría), número de contrato, valores, supervisor y todas las obligaciones contractuales, creando tu nuevo contrato de forma 100% independiente.\n\n`;
+        msg += `💡 O escribe /cancelar para volver.`;
+
+        if (messageId) {
+            await editTelegramMessage(chatId, messageId, msg, [
+                [{ text: '❌ Cancelar', callback_data: 'switch_contract' }]
+            ]);
+        } else {
+            await sendTelegramKeyboardMessage(chatId, msg, [
+                [{ text: '❌ Cancelar', callback_data: 'switch_contract' }]
+            ]);
+        }
         return;
     }
 
@@ -932,9 +1575,12 @@ const handleCallbackQuery = async (callbackQuery) => {
         const periodId = data.replace('summary_', '');
         await showPeriodSummary(chatId, periodId, messageId);
     } else if (data === 'download_zip') {
-        const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
         if (!billingPeriod) {
-            await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema.');
+            await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema para este contrato.');
             return;
         }
         await handleGenerateAndDownload(chatId, user, billingPeriod._id);
@@ -948,7 +1594,10 @@ const handleCallbackQuery = async (callbackQuery) => {
         await handleGenerateAndDownload(chatId, user, periodId);
         return;
     } else if (data === 'quick_upload_planilla') {
-        const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
         if (!billingPeriod) {
             await promptSecuritySocial(chatId, user);
         } else {
@@ -971,7 +1620,8 @@ const handleCallbackQuery = async (callbackQuery) => {
             periodId: periodId,
             actNumber: period ? period.actNumber : 1,
             obligationIndex: index,
-            comment: (act && act.comment) || 'Actividad desarrollada en el periodo'
+            comment: (act && act.comment) || 'Actividad desarrollada en el periodo',
+            activeContractId: period ? period.contract : null
         });
         await sendTelegramKeyboardMessage(chatId, `📸 Envía la siguiente foto o archivo de soporte para la Obligación ${oblCode}.\n\n💡 *Tip profesional:* Si deseas que esta imagen tenga un texto descriptivo específico en el Informe de Actividades, puedes incluirlo en el *pie de foto (caption)* al enviarla.`, [
             [{ text: '⬅️ Volver a Obligaciones', callback_data: `select_act_${period ? period.actNumber : 1}` }],
@@ -1031,6 +1681,15 @@ function isSubirEvidencia(str) {
 }
 
 /**
+ * Checks if incoming text requests to view or switch contracts
+ */
+function isContratosCommand(str) {
+    if (!str) return false;
+    const clean = str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    return /^((\/)?contratos?|mis\s*contratos?|cambiar\s*contrato|cambiar\s*de\s*contrato|seleccionar\s*contrato|lista\s*de\s*contratos)(\s.*|[!.,;:]*)?$/i.test(clean);
+}
+
+/**
  * Checks if incoming text is a greeting or start command
  */
 function isGreeting(str) {
@@ -1050,6 +1709,69 @@ const handleIncomingMessage = async (message) => {
     const chatId = message.chat.id.toString();
     const text = (message.text || '').trim();
     const session = sessions.get(chatId);
+
+    // 0. ID Discovery Command (Always accessible to anyone)
+    if (text === '/id' || text === '/mi_id' || text.toLowerCase() === 'id' || text.toLowerCase() === 'mi id') {
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId });
+        const user = await User.findOne({ telegramChatId: chatId });
+        const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || 'Usuario';
+        const senderUser = message.from?.username ? `@${message.from.username}` : 'sin alias';
+
+        let msg = `🆔 Tu Telegram Chat ID es: ${chatId}\n\n`;
+        msg += `👤 Nombre en Telegram: ${senderName} (${senderUser})\n`;
+
+        if (privilege) {
+            msg += `🛡️ Rol: OPERADOR AUTORIZADO (${privilege.isActive ? 'ACTIVO' : 'INACTIVO'})\n`;
+            msg += `🏷️ Nombre Operador: ${privilege.label}\n`;
+            msg += `🌐 Alcance: ${privilege.scope === 'all' ? 'Todos los funcionarios (Acceso Global Maestro)' : `${privilege.assignedUsers?.length || 0} funcionario(s) asignado(s)`}\n\n`;
+            msg += `💡 Usa el comando /funcionario para cambiar de funcionario en cualquier momento.`;
+        } else if (user) {
+            msg += `✅ Vinculado a funcionario: ${user.fullName} (${user.email})\n\n`;
+            msg += `👉 Si necesitas gestionar cuentas de cobro de otros funcionarios desde este chat, entrega este ID (${chatId}) al Administrador Maestro en el panel web para recibir privilegios multicuenta.`;
+        } else {
+            msg += `ℹ️ Estado: Usuario Estándar (No vinculado)\n\n`;
+            msg += `👉 Para que el Administrador Maestro te otorgue privilegios de Operador Multicuenta (gestionar cuentas de diferentes funcionarios), entrégale este ID numérico:\n\n${chatId}`;
+        }
+        await sendTelegramMessage(chatId, msg);
+        return;
+    }
+
+    // 0.1 Operator Funcionario Switch Command
+    if (['/funcionario', '/funcionarios', '/cambiar', '/cambiar_funcionario', 'cambiar funcionario', 'cambiar funcionarios'].includes(text.toLowerCase().trim())) {
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (!privilege) {
+            await sendTelegramMessage(chatId, `ℹ️ La gestión de múltiples funcionarios está reservada para Operadores Autorizados con privilegios.\n\nEnvía /id para conocer tu Telegram ID y solicitar privilegios al Administrador Maestro.`);
+            return;
+        }
+        await showOperatorFuncionarioMenu(chatId, privilege);
+        return;
+    }
+
+    // 0.2 Operator Status Command
+    if (text === '/operador' || text.toLowerCase() === 'operador' || text.toLowerCase() === 'modo operador') {
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (!privilege) {
+            await sendTelegramMessage(chatId, `ℹ️ No tienes un rol de operador asignado a este chat. Envía /id para ver tu ID.`);
+            return;
+        }
+        const session = sessions.get(chatId);
+        let msg = `🛡️ MODO OPERADOR MULTICUENTA\n\n`;
+        msg += `🏷️ Operador: ${privilege.label}\n`;
+        msg += `🌐 Alcance: ${privilege.scope === 'all' ? 'Todos los funcionarios (Acceso Global Maestro)' : `${privilege.assignedUsers?.length || 0} funcionarios asignados`}\n`;
+        if (session && session.activeUserId) {
+            const activeUser = await User.findById(session.activeUserId);
+            const contract = session.activeContractId ? await Contract.findById(session.activeContractId) : null;
+            msg += `👤 Funcionario en gestión: ${activeUser?.fullName || 'Desconocido'}\n`;
+            if (contract) msg += `📋 Contrato: ${contract.contractNumber || 'En trámite'} (${contract.entityName || 'Alcaldía'})\n`;
+        } else {
+            msg += `👤 Funcionario en gestión: Ninguno seleccionado aún\n`;
+        }
+        msg += `\nPuedes presionar el botón abajo para cambiar de funcionario:`;
+        await sendTelegramKeyboardMessage(chatId, msg, [
+            [{ text: '👥 Seleccionar / Cambiar Funcionario', callback_data: 'operator_switch_user' }]
+        ]);
+        return;
+    }
 
     // 1. Cancellation command
     if (text === '/cancelar' || text.toLowerCase() === 'cancelar' || text === '/cancel') {
@@ -1272,13 +1994,13 @@ const handleIncomingMessage = async (message) => {
                 return;
             }
 
-            const allContracts = await Contract.find().populate('user');
-            const contract = allContracts.find(c => (c.idNumber || '').replace(/\D/g, '') === inputCedula);
+            const allContracts = await Contract.find().populate('user').sort({ createdAt: -1 });
+            const userContracts = allContracts.filter(c => (c.idNumber || '').replace(/\D/g, '') === inputCedula);
 
-            if (contract) {
-                let user = contract.user;
+            if (userContracts.length > 0) {
+                let user = userContracts[0].user;
                 if (!user || !user._id) {
-                    user = await User.findById(contract.user) || await User.findOne();
+                    user = await User.findById(userContracts[0].user) || await User.findOne();
                 }
                 if (user) {
                     user.telegramChatId = chatId;
@@ -1286,39 +2008,62 @@ const handleIncomingMessage = async (message) => {
                     await user.save();
                 }
 
-                sessions.set(chatId, {
-                    state: 'identified',
-                    cedula: inputCedula,
-                    contractId: contract._id,
-                    userId: user ? user._id : null
-                });
-
-                const contractorName = contract.contractorName || (user ? user.fullName : 'Funcionario / Contratista');
-                let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
-                reply += `👤 Funcionario: ${contractorName}\n`;
-                reply += `🪪 Cédula: ${contract.idNumber || inputCedula}\n`;
-                reply += `📋 Contrato: ${contract.contractType || 'Prestación de Servicios'}\n`;
-                reply += `🏛️ Dependencia: ${contract.supervisorDependency || 'Alcaldía de Armenia'}\n\n`;
-                reply += `Tu usuario ha sido verificado con éxito en la base de datos.\n\n`;
-
-                if (!contract.activities || contract.activities.length === 0) {
-                    reply += `⚠️ Aún no has cargado los documentos de tu contrato (Minuta, Acta de Inicio, RP, RUT, Certificación Bancaria).\n\n¿Deseas cargarlos ahora para extraer tus obligaciones y configurar tu cuenta?`;
+                if (userContracts.length === 1) {
+                    const contract = userContracts[0];
                     sessions.set(chatId, {
-                        state: 'awaiting_docs_consent',
+                        state: 'identified',
+                        cedula: inputCedula,
+                        activeContractId: contract._id,
+                        contractId: contract._id,
                         userId: user ? user._id : null
                     });
-                    await sendTelegramKeyboardMessage(chatId, reply, [
-                        [{ text: '📄 Sí, cargar documentos', callback_data: 'start_docs_flow' }],
-                        [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
-                    ]);
-                } else {
-                    reply += `¿Deseas cargar evidencia para tu informe de actividades?`;
 
-                    await sendTelegramKeyboardMessage(chatId, reply, [
-                        [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
-                        [{ text: '📄 Actualizar Documentos', callback_data: 'start_docs_flow' }],
-                        [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
-                    ]);
+                    const contractorName = contract.contractorName || (user ? user.fullName : 'Funcionario / Contratista');
+                    let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
+                    reply += `👤 Funcionario: ${contractorName}\n`;
+                    reply += `🪪 Cédula: ${contract.idNumber || inputCedula}\n`;
+                    reply += `📋 Contrato: ${contract.contractNumber || 'En trámite'}\n`;
+                    reply += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n\n`;
+                    reply += `Tu usuario ha sido verificado con éxito en la base de datos.\n\n`;
+
+                    if (!contract.activities || contract.activities.length === 0) {
+                        reply += `⚠️ Aún no has cargado los documentos de tu contrato (Minuta, Acta de Inicio, RP, RUT, Certificación Bancaria).\n\n¿Deseas cargarlos ahora para extraer tus obligaciones y configurar tu cuenta?`;
+                        sessions.set(chatId, {
+                            state: 'awaiting_docs_consent',
+                            userId: user ? user._id : null,
+                            activeContractId: contract._id
+                        });
+                        await sendTelegramKeyboardMessage(chatId, reply, [
+                            [{ text: '📄 Sí, cargar documentos', callback_data: 'start_docs_flow' }],
+                            [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
+                        ]);
+                    } else {
+                        reply += `¿Qué deseas gestionar para este contrato?`;
+
+                        await sendTelegramKeyboardMessage(chatId, reply, [
+                            [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+                            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                            [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+                            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+                            [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                        ]);
+                    }
+                } else {
+                    // Multiple contracts registered for this person
+                    sessions.set(chatId, {
+                        state: 'identified',
+                        cedula: inputCedula,
+                        userId: user ? user._id : null
+                    });
+
+                    let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
+                    reply += `👤 Funcionario: ${user.fullName}\n`;
+                    reply += `🪪 Cédula: ${inputCedula}\n\n`;
+                    reply += `🏛️ Tienes ${userContracts.length} contratos registrados a tu nombre en el sistema.\n`;
+                    reply += `Por favor selecciona con cuál contrato deseas trabajar hoy:`;
+
+                    await sendTelegramMessage(chatId, reply);
+                    await showContractSelectionMenu(chatId, user);
                 }
             } else {
                 sessions.set(chatId, {
@@ -1524,6 +2269,120 @@ const handleIncomingMessage = async (message) => {
         }
 
         // -------------------------------------------------------------
+        // NEW CONTRACT REGISTRATION FLOW (Via Telegram Minuta upload)
+        // -------------------------------------------------------------
+        if (session.state === 'awaiting_new_contract_minuta') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            if (text.toLowerCase() === 'cancelar' || text === '/cancelar') {
+                sessions.set(chatId, { state: 'idle' });
+                await sendTelegramMessage(chatId, '❌ Registro de nuevo contrato cancelado.');
+                await showContractSelectionMenu(chatId, user);
+                return;
+            }
+
+            const media = extractTelegramFile(message);
+            if (!media) {
+                await sendTelegramKeyboardMessage(chatId, '⚠️ Por favor adjunta el archivo PDF de la minuta de tu nuevo contrato, o presiona Cancelar:', [
+                    [{ text: '❌ Cancelar', callback_data: 'switch_contract' }]
+                ]);
+                return;
+            }
+
+            await sendTelegramMessage(chatId, '⏳ Descargando nuevo contrato y analizando con Inteligencia Artificial...');
+            try {
+                const fileInfo = await downloadTelegramMedia(media.fileId, 'minuta_nueva', media.originalName, media.mimeType);
+
+                const existingContracts = await getUserContracts(user._id);
+                const prev = existingContracts[0] || null;
+
+                const newContract = new Contract({
+                    user: user._id,
+                    contractorName: user.fullName,
+                    idNumber: prev?.idNumber || '',
+                    contractorEmail: user.email,
+                    contractorPhone: prev?.contractorPhone || '',
+                    contractorAddress: prev?.contractorAddress || '',
+                    bankName: prev?.bankName || '',
+                    accountNumber: prev?.accountNumber || '',
+                    paymentMethod: prev?.paymentMethod || 'Abono en cuenta',
+                    isTaxFiler: prev ? prev.isTaxFiler : false,
+                    baseDocumentPath: fileInfo.relativePath,
+                    status: 'active'
+                });
+
+                try {
+                    const extracted = await geminiService.extractContractData(fileInfo.absolutePath);
+                    if (extracted) {
+                        if (extracted.contractNumber) newContract.contractNumber = extracted.contractNumber;
+                        if (extracted.contractType) newContract.contractType = extracted.contractType;
+                        if (extracted.entityName) newContract.entityName = extracted.entityName;
+                        if (extracted.supervisorDependency) newContract.supervisorDependency = extracted.supervisorDependency;
+                        if (extracted.contractorName && !newContract.contractorName) newContract.contractorName = extracted.contractorName;
+                        if (extracted.idNumber && !newContract.idNumber) newContract.idNumber = extracted.idNumber;
+                        if (extracted.startDate) newContract.startDate = extracted.startDate;
+                        if (extracted.endDate) newContract.endDate = extracted.endDate;
+                        if (extracted.executionTerm) newContract.executionTerm = extracted.executionTerm;
+                        if (extracted.periodType) newContract.periodType = extracted.periodType;
+                        if (extracted.initialDurationMonths) newContract.initialDurationMonths = Number(extracted.initialDurationMonths);
+                        if (extracted.cdp) newContract.cdp = extracted.cdp;
+                        if (extracted.rp) newContract.rp = extracted.rp;
+                        if (extracted.rubro) newContract.rubro = extracted.rubro;
+                        if (extracted.totalValue) newContract.totalValue = String(extracted.totalValue);
+                        if (extracted.totalValueWord) newContract.totalValueWord = extracted.totalValueWord;
+                        if (extracted.monthlyValue) newContract.monthlyValue = String(extracted.monthlyValue);
+                        if (extracted.monthlyValueWord) newContract.monthlyValueWord = extracted.monthlyValueWord;
+                        if (extracted.bankName) newContract.bankName = extracted.bankName;
+                        if (extracted.accountNumber) newContract.accountNumber = extracted.accountNumber;
+                        if (extracted.paymentMethod) newContract.paymentMethod = extracted.paymentMethod;
+                        if (extracted.contractObject) newContract.contractObject = extracted.contractObject;
+                        if (extracted.supervisorName) newContract.supervisorName = extracted.supervisorName;
+                        if (extracted.contractorAddress) newContract.contractorAddress = extracted.contractorAddress;
+                        if (extracted.cutoffDay) newContract.cutoffDay = Number(extracted.cutoffDay);
+                        if (extracted.activities && Array.isArray(extracted.activities) && extracted.activities.length > 0) {
+                            newContract.activities = extracted.activities;
+                        }
+                    }
+                } catch (aiErr) {
+                    console.error('Error extrayendo datos de nueva minuta con IA:', aiErr.message);
+                }
+
+                await newContract.save();
+
+                sessions.set(chatId, {
+                    state: 'idle',
+                    activeContractId: newContract._id,
+                    contractId: newContract._id,
+                    userId: user._id
+                });
+
+                const oblCount = newContract.activities ? newContract.activities.length : 0;
+                let reply = `🎉 ¡Nuevo contrato registrado exitosamente!\n\n`;
+                reply += `📌 Contrato N°: ${newContract.contractNumber || 'En trámite'}\n`;
+                reply += `🏛️ Entidad: ${newContract.entityName || newContract.supervisorDependency || 'Alcaldía'}\n`;
+                reply += `👤 Supervisor: ${newContract.supervisorName || 'No asignado'}\n`;
+                reply += `⏱️ Plazo: ${getContractDurationText(newContract)}\n`;
+                reply += `📝 Obligaciones identificadas: ${oblCount}\n\n`;
+                reply += `Este contrato ha sido configurado como tu contrato activo actual. Todas las evidencias y actas que gestiones ahora pertenecerán exclusivamente a este contrato.`;
+
+                await sendTelegramKeyboardMessage(chatId, reply, [
+                    [{ text: '📂 Subir Evidencias de este Contrato', callback_data: 'subir_evidencia' }],
+                    [{ text: '📄 Cargar Documentos (RP, Acta Inicio, etc.)', callback_data: 'start_docs_flow' }],
+                    [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
+                ]);
+            } catch (err) {
+                console.error('Error al registrar nuevo contrato:', err);
+                await sendTelegramMessage(chatId, `❌ Error al procesar el archivo: ${err.message}`);
+            }
+            return;
+        }
+
+        // -------------------------------------------------------------
         // SEQUENTIAL CONTRACT DOCUMENTS FLOW (6 STEPS)
         // -------------------------------------------------------------
         // Step 0: Consent to start loading docs
@@ -1571,7 +2430,9 @@ const handleIncomingMessage = async (message) => {
             await sendTelegramMessage(chatId, '⏳ Descargando minuta y analizando con Inteligencia Artificial...');
             try {
                 const fileInfo = await downloadTelegramMedia(media.fileId, 'minuta', media.originalName, media.mimeType);
-                let contract = await Contract.findOne({ user: user._id });
+                let contract = (session.activeContractId || session.contractId)
+                    ? await Contract.findById(session.activeContractId || session.contractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
                 if (!contract) contract = new Contract({ user: user._id });
                 contract.baseDocumentPath = fileInfo.relativePath;
 
@@ -1580,6 +2441,7 @@ const handleIncomingMessage = async (message) => {
                     if (extracted) {
                         if (extracted.contractNumber) contract.contractNumber = extracted.contractNumber;
                         if (extracted.contractType) contract.contractType = extracted.contractType;
+                        if (extracted.entityName) contract.entityName = extracted.entityName;
                         if (extracted.contractorName && !contract.contractorName) contract.contractorName = extracted.contractorName;
                         if (extracted.idNumber && !contract.idNumber) contract.idNumber = extracted.idNumber;
                         if (extracted.startDate) contract.startDate = extracted.startDate;
@@ -1608,11 +2470,18 @@ const handleIncomingMessage = async (message) => {
                         }
                     }
                     await contract.save();
+                    session.activeContractId = contract._id;
+                    session.contractId = contract._id;
+                    sessions.set(chatId, session);
+
                     const oblCount = contract.activities ? contract.activities.length : 0;
-                    await sendTelegramMessage(chatId, `✅ Minuta procesada con éxito.\n📋 Contrato N°: ${contract.contractNumber || 'Registrado'}\n📝 Obligaciones identificadas: ${oblCount}`);
+                    await sendTelegramMessage(chatId, `✅ Minuta procesada con éxito.\n📋 Contrato N°: ${contract.contractNumber || 'Registrado'}\n🏛️ Entidad: ${contract.entityName || 'Alcaldía'}\n📝 Obligaciones identificadas: ${oblCount}`);
                 } catch (aiErr) {
                     console.error('Error de IA en Minuta:', aiErr);
                     await contract.save();
+                    session.activeContractId = contract._id;
+                    session.contractId = contract._id;
+                    sessions.set(chatId, session);
                     await sendTelegramMessage(chatId, `⚠️ Se guardó el archivo de la Minuta, pero no se pudo extraer toda la información automáticamente (${aiErr.message}).`);
                 }
             } catch (err) {
@@ -1649,7 +2518,9 @@ const handleIncomingMessage = async (message) => {
             await sendTelegramMessage(chatId, '⏳ Descargando Acta de Inicio y analizando con IA...');
             try {
                 const fileInfo = await downloadTelegramMedia(media.fileId, 'acta_inicio', media.originalName, media.mimeType);
-                let contract = await Contract.findOne({ user: user._id });
+                let contract = (session.activeContractId || session.contractId)
+                    ? await Contract.findById(session.activeContractId || session.contractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
                 if (contract) {
                     contract.actaInicioPath = fileInfo.relativePath;
                     try {
@@ -1710,7 +2581,9 @@ const handleIncomingMessage = async (message) => {
             await sendTelegramMessage(chatId, '⏳ Descargando RP y analizando con IA...');
             try {
                 const fileInfo = await downloadTelegramMedia(media.fileId, 'rp', media.originalName, media.mimeType);
-                let contract = await Contract.findOne({ user: user._id });
+                let contract = (session.activeContractId || session.contractId)
+                    ? await Contract.findById(session.activeContractId || session.contractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
                 if (contract) {
                     contract.rpPath = fileInfo.relativePath;
                     try {
@@ -1762,7 +2635,9 @@ const handleIncomingMessage = async (message) => {
             await sendTelegramMessage(chatId, '⏳ Descargando RUT y analizando con IA...');
             try {
                 const fileInfo = await downloadTelegramMedia(media.fileId, 'rut', media.originalName, media.mimeType);
-                let contract = await Contract.findOne({ user: user._id });
+                let contract = (session.activeContractId || session.contractId)
+                    ? await Contract.findById(session.activeContractId || session.contractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
                 if (contract) {
                     contract.rutPath = fileInfo.relativePath;
                     const candidates = [];
@@ -1830,7 +2705,9 @@ const handleIncomingMessage = async (message) => {
             await sendTelegramMessage(chatId, '⏳ Descargando Certificación Bancaria y analizando con IA...');
             try {
                 const fileInfo = await downloadTelegramMedia(media.fileId, 'bank_cert', media.originalName, media.mimeType);
-                let contract = await Contract.findOne({ user: user._id });
+                let contract = (session.activeContractId || session.contractId)
+                    ? await Contract.findById(session.activeContractId || session.contractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
                 if (contract) {
                     contract.bankCertificatePath = fileInfo.relativePath;
                     const candidates = [];
@@ -1896,14 +2773,19 @@ const handleIncomingMessage = async (message) => {
             await sendTelegramMessage(chatId, '⏳ Descargando Planilla de Seguridad Social y analizando con Inteligencia Artificial...');
             try {
                 const fileInfo = await downloadTelegramMedia(media.fileId, 'seguridad_social', media.originalName, media.mimeType);
-                let contract = await Contract.findOne({ user: user._id });
+                let contract = (session.activeContractId || session.contractId)
+                    ? await Contract.findById(session.activeContractId || session.contractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
                 if (contract) {
                     contract.securitySocialPath = fileInfo.relativePath;
                     await contract.save();
                 }
 
-                // Also update the latest / pending billing period if exists
-                const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+                // Also update the latest / pending billing period if exists for this contract
+                const billingPeriod = await BillingPeriod.findOne({
+                    user: user._id,
+                    $or: [{ contract: contract ? contract._id : null }, { contract: null }]
+                }).sort({ createdAt: -1 });
 
                 try {
                     const extracted = await geminiService.extractSecuritySocialData(fileInfo.absolutePath);
@@ -1987,7 +2869,11 @@ const handleIncomingMessage = async (message) => {
                 period.securitySocialPath = fileInfo.relativePath;
 
                 // Also update contract securitySocialPath
-                await Contract.findOneAndUpdate({ user: user._id }, { securitySocialPath: fileInfo.relativePath });
+                if (period.contract) {
+                    await Contract.findByIdAndUpdate(period.contract, { securitySocialPath: fileInfo.relativePath });
+                } else {
+                    await Contract.findOneAndUpdate({ user: user._id }, { securitySocialPath: fileInfo.relativePath });
+                }
 
                 try {
                     const extracted = await geminiService.extractSecuritySocialData(fileInfo.absolutePath);
@@ -2034,21 +2920,80 @@ const handleIncomingMessage = async (message) => {
 
     // 3. Greeting Detection: "hola", "buen dia", "/start", etc.
     if (isGreeting(text)) {
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (privilege) {
+            privilege.lastActiveAt = new Date();
+            await privilege.save();
+
+            const session = sessions.get(chatId);
+            if (session && session.activeUserId) {
+                const activeUser = await User.findById(session.activeUserId);
+                if (activeUser) {
+                    const contract = session.activeContractId ? await Contract.findById(session.activeContractId) : await Contract.findOne({ user: activeUser._id }).sort({ createdAt: -1 });
+                    let reply = `🛡️ MODO OPERADOR: ${privilege.label}\n`;
+                    reply += `━━━━━━━━━━━━━━━━━━━━\n`;
+                    reply += `👤 FUNCIONARIO ACTIVO: ${activeUser.fullName}\n`;
+                    reply += `🪪 Cédula: ${contract?.idNumber || 'Sin cédula'}\n`;
+                    reply += `📋 Contrato: ${contract?.contractNumber || 'En trámite'}\n`;
+                    reply += `🏛️ Entidad: ${contract?.entityName || contract?.supervisorDependency || 'Alcaldía de Armenia'}\n`;
+                    reply += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+                    reply += `¿Qué deseas gestionar para ${activeUser.fullName}?`;
+
+                    await sendTelegramKeyboardMessage(chatId, reply, [
+                        [{ text: '📂 Subir Evidencias', callback_data: 'subir_evidencia' }],
+                        [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                        [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+                        [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+                        [{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]
+                    ]);
+                    return;
+                }
+            }
+
+            await showOperatorFuncionarioMenu(chatId, privilege);
+            return;
+        }
+
         sessions.set(chatId, { state: 'awaiting_identification' });
         await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
         return;
     }
 
+    // 3.5. Contracts trigger: "contratos", "mis contratos", "cambiar contrato", "/contratos"
+    if (isContratosCommand(text)) {
+        const user = await resolveActiveUser(chatId);
+        if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
+            sessions.set(chatId, { state: 'awaiting_identification' });
+            await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
+            return;
+        }
+        await showContractSelectionMenu(chatId, user);
+        return;
+    }
+
     // 4. Planilla trigger: "planilla", "subir planilla", "seguridad social", etc.
     if (isPlanilla(text)) {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
         }
 
-        const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
         if (!billingPeriod) {
             await promptSecuritySocial(chatId, user);
             return;
@@ -2060,8 +3005,13 @@ const handleIncomingMessage = async (message) => {
 
     // 5. "Subir Evidencia" trigger: "subir evidencia", "si", "si deseo cargar evidencia", etc.
     if (isSubirEvidencia(text)) {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
@@ -2074,56 +3024,95 @@ const handleIncomingMessage = async (message) => {
     const numericOnly = text.replace(/\D/g, '');
     const isOnlyDigitsAndDots = /^[\d.\s]+$/.test(text);
     if (isOnlyDigitsAndDots && numericOnly.length >= 6 && numericOnly.length <= 11) {
-        const allContracts = await Contract.find().populate('user');
-        const contract = allContracts.find(c => (c.idNumber || '').replace(/\D/g, '') === numericOnly);
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
 
-        if (contract) {
-            let user = contract.user;
+        const allContracts = await Contract.find().populate('user').sort({ createdAt: -1 });
+        const userContracts = allContracts.filter(c => (c.idNumber || '').replace(/\D/g, '') === numericOnly);
+
+        if (userContracts.length > 0) {
+            let user = userContracts[0].user;
             if (!user || !user._id) {
-                user = await User.findById(contract.user) || await User.findOne();
+                user = await User.findById(userContracts[0].user) || await User.findOne();
             }
+
+            if (privilege) {
+                // If operator, verify scope
+                if (privilege.scope === 'specific') {
+                    const isAssigned = (privilege.assignedUsers || []).some(id => id.toString() === user._id.toString());
+                    if (!isAssigned) {
+                        await sendTelegramMessage(chatId, `⚠️ No tienes permisos asignados para gestionar al funcionario con cédula ${numericOnly} ("${user.fullName}"). Solicita al Administrador Maestro que te lo asigne desde el panel web.`);
+                        return;
+                    }
+                }
+                await selectOperatorUser(chatId, privilege, user._id);
+                return;
+            }
+
             if (user) {
                 user.telegramChatId = chatId;
                 user.telegramVerificationCode = null;
                 await user.save();
             }
 
-            sessions.set(chatId, {
-                state: 'identified',
-                cedula: numericOnly,
-                contractId: contract._id,
-                userId: user ? user._id : null
-            });
-
-            const contractorName = contract.contractorName || (user ? user.fullName : 'Funcionario / Contratista');
-            let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
-            reply += `👤 Funcionario: ${contractorName}\n`;
-            reply += `🪪 Cédula: ${contract.idNumber || numericOnly}\n`;
-            reply += `📋 Contrato: ${contract.contractType || 'Prestación de Servicios'}\n`;
-            reply += `🏛️ Dependencia: ${contract.supervisorDependency || 'Alcaldía de Armenia'}\n\n`;
-            reply += `Tu usuario ha sido verificado con éxito en la base de datos.\n\n`;
-
-            if (!contract.activities || contract.activities.length === 0) {
-                reply += `⚠️ Aún no has cargado los documentos de tu contrato (Minuta, Acta de Inicio, RP, RUT, Certificación Bancaria, Planilla de Seguridad Social).\n\n¿Deseas cargarlos ahora para extraer tus obligaciones y configurar tu cuenta?`;
+            if (userContracts.length === 1) {
+                const contract = userContracts[0];
                 sessions.set(chatId, {
-                    state: 'awaiting_docs_consent',
+                    state: 'identified',
+                    cedula: numericOnly,
+                    activeContractId: contract._id,
+                    contractId: contract._id,
                     userId: user ? user._id : null
                 });
-                await sendTelegramKeyboardMessage(chatId, reply, [
-                    [{ text: '📄 Sí, cargar documentos', callback_data: 'start_docs_flow' }],
-                    [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
-                ]);
-            } else {
-                reply += `¿Qué deseas realizar hoy?`;
 
-                await sendTelegramKeyboardMessage(chatId, reply, [
-                    [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
-                    [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
-                    [{ text: '📄 Actualizar Documentos', callback_data: 'start_docs_flow' }],
-                    [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
-                ]);
+                const contractorName = contract.contractorName || (user ? user.fullName : 'Funcionario / Contratista');
+                let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
+                reply += `👤 Funcionario: ${contractorName}\n`;
+                reply += `🪪 Cédula: ${contract.idNumber || numericOnly}\n`;
+                reply += `📋 Contrato: ${contract.contractNumber || 'En trámite'}\n`;
+                reply += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n\n`;
+                reply += `Tu usuario ha sido verificado con éxito en la base de datos.\n\n`;
+
+                if (!contract.activities || contract.activities.length === 0) {
+                    reply += `⚠️ Aún no has cargado los documentos de tu contrato (Minuta, Acta de Inicio, RP, RUT, Certificación Bancaria, Planilla de Seguridad Social).\n\n¿Deseas cargarlos ahora para extraer tus obligaciones y configurar tu cuenta?`;
+                    sessions.set(chatId, {
+                        state: 'awaiting_docs_consent',
+                        userId: user ? user._id : null,
+                        activeContractId: contract._id
+                    });
+                    await sendTelegramKeyboardMessage(chatId, reply, [
+                        [{ text: '📄 Sí, cargar documentos', callback_data: 'start_docs_flow' }],
+                        [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
+                    ]);
+                } else {
+                    reply += `¿Qué deseas realizar hoy?`;
+
+                    await sendTelegramKeyboardMessage(chatId, reply, [
+                        [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+                        [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                        [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+                        [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+                        [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                    ]);
+                }
+                return;
+            } else {
+                // Multiple contracts registered for this person
+                sessions.set(chatId, {
+                    state: 'identified',
+                    cedula: numericOnly,
+                    userId: user ? user._id : null
+                });
+
+                let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
+                reply += `👤 Funcionario: ${user.fullName}\n`;
+                reply += `🪪 Cédula: ${numericOnly}\n\n`;
+                reply += `🏛️ Tienes ${userContracts.length} contratos registrados a tu nombre en el sistema.\n`;
+                reply += `Por favor selecciona con cuál contrato deseas trabajar hoy:`;
+
+                await sendTelegramMessage(chatId, reply);
+                await showContractSelectionMenu(chatId, user);
+                return;
             }
-            return;
         } else {
             sessions.set(chatId, {
                 state: 'awaiting_registration_consent',
@@ -2153,32 +3142,54 @@ const handleIncomingMessage = async (message) => {
                 user.telegramVerificationCode = null;
                 await user.save();
 
-                const contract = await Contract.findOne({ user: user._id });
+                const userContracts = await getUserContracts(user._id);
 
-                sessions.set(chatId, {
-                    state: 'identified',
-                    userId: user._id,
-                    contractId: contract ? contract._id : null,
-                    cedula: contract?.idNumber || ''
-                });
+                if (userContracts.length > 1) {
+                    sessions.set(chatId, {
+                        state: 'identified',
+                        userId: user._id,
+                        cedula: userContracts[0]?.idNumber || ''
+                    });
 
-                let reply = `✅ ¡Cuenta vinculada exitosamente!\n\n`;
-                reply += `👋 Hola ${user.fullName}, tu cuenta de Telegram ha quedado conectada con éxito a tu usuario en el sistema.\n\n`;
+                    let reply = `✅ ¡Cuenta vinculada exitosamente!\n\n`;
+                    reply += `👋 Hola ${user.fullName}, tu cuenta de Telegram ha quedado conectada con éxito.\n\n`;
+                    reply += `🏛️ Tienes ${userContracts.length} contratos registrados a tu nombre. Por favor selecciona el contrato con el que deseas trabajar:`;
 
-                if (!contract) {
-                    reply += `ℹ️ Nota: Aún no has configurado tu contrato base en el sistema.\n`;
-                    reply += `Puedes escribir /documentos para subir tu minuta y documentos ahora mismo para comenzar a radicar cuentas de cobro.`;
                     await sendTelegramMessage(chatId, reply);
-                } else if (!contract.activities || contract.activities.length === 0) {
-                    reply += `⚠️ Tu contrato está registrado pero aún no tiene obligaciones específicas cargadas.\n\nPuedes cargar tu minuta en PDF para extraerlas.`;
-                    await sendTelegramMessage(chatId, reply);
+                    await showContractSelectionMenu(chatId, user);
+                } else if (userContracts.length === 1) {
+                    const contract = userContracts[0];
+                    sessions.set(chatId, {
+                        state: 'identified',
+                        userId: user._id,
+                        activeContractId: contract._id,
+                        contractId: contract._id,
+                        cedula: contract?.idNumber || ''
+                    });
+
+                    let reply = `✅ ¡Cuenta vinculada exitosamente!\n\n`;
+                    reply += `👋 Hola ${user.fullName}, tu cuenta de Telegram ha quedado conectada con éxito a tu usuario en el sistema.\n\n`;
+
+                    if (!contract.activities || contract.activities.length === 0) {
+                        reply += `⚠️ Tu contrato está registrado pero aún no tiene obligaciones específicas cargadas.\n\nPuedes cargar tu minuta en PDF para extraerlas.`;
+                        await sendTelegramMessage(chatId, reply);
+                    } else {
+                        reply += `¿Qué deseas realizar hoy?`;
+                        await sendTelegramKeyboardMessage(chatId, reply, [
+                            [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+                            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                            [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+                            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+                            [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                        ]);
+                    }
                 } else {
-                    reply += `¿Qué deseas realizar hoy?`;
+                    let reply = `✅ ¡Cuenta vinculada exitosamente!\n\n`;
+                    reply += `👋 Hola ${user.fullName}, tu cuenta de Telegram ha quedado conectada con éxito a tu usuario en el sistema.\n\n`;
+                    reply += `ℹ️ Nota: Aún no has configurado tu contrato base en el sistema.\n`;
+                    reply += `Puedes presionar el botón abajo para registrar tu primer contrato cargando la minuta:`;
                     await sendTelegramKeyboardMessage(chatId, reply, [
-                        [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
-                        [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
-                        [{ text: '📄 Actualizar Documentos', callback_data: 'start_docs_flow' }],
-                        [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
+                        [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
                     ]);
                 }
             } else {
@@ -2189,8 +3200,13 @@ const handleIncomingMessage = async (message) => {
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
         }
     } else if (text === '/subir' || text.toLowerCase() === 'subir') {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
@@ -2209,17 +3225,25 @@ const handleIncomingMessage = async (message) => {
         text.toLowerCase() === 'zip' ||
         text.toLowerCase() === 'bajar cuenta'
     ) {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
         }
 
-        const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
 
         if (!billingPeriod) {
-            await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema.');
+            await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema para este contrato.');
             return;
         }
 
@@ -2232,16 +3256,24 @@ const handleIncomingMessage = async (message) => {
         text.toLowerCase() === 'formatos word' ||
         text.toLowerCase() === 'documentos word'
     ) {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
         }
 
-        const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
         if (!billingPeriod) {
-            await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema.');
+            await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema para este contrato.');
             return;
         }
 
@@ -2253,14 +3285,22 @@ const handleIncomingMessage = async (message) => {
         text === '/estado' ||
         text.toLowerCase() === 'estado'
     ) {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
         }
 
-        const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
         if (billingPeriod) {
             await showPeriodSummary(chatId, billingPeriod._id);
         } else {
@@ -2268,14 +3308,22 @@ const handleIncomingMessage = async (message) => {
         }
         return;
     } else if (text === '/planilla' || text.toLowerCase() === 'planilla' || text.toLowerCase() === 'subir planilla' || text.toLowerCase() === 'cargar planilla') {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
         }
 
-        const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
         if (!billingPeriod) {
             await promptSecuritySocial(chatId, user);
             return;
@@ -2284,8 +3332,13 @@ const handleIncomingMessage = async (message) => {
         await promptPeriodPlanilla(chatId, billingPeriod._id);
         return;
     } else if (text === '/documentos' || text.toLowerCase() === 'documentos' || text.toLowerCase() === 'cargar documentos' || text.toLowerCase() === 'subir documentos') {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (!user) {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
             return;
@@ -2293,7 +3346,7 @@ const handleIncomingMessage = async (message) => {
         await startContractDocsFlow(chatId, user);
         return;
     } else {
-        const user = await User.findOne({ telegramChatId: chatId });
+        const user = await resolveActiveUser(chatId);
         if (user) {
             const media = extractTelegramFile(message);
             const caption = (message.caption || '').toLowerCase();
@@ -2302,7 +3355,10 @@ const handleIncomingMessage = async (message) => {
                                    fileName.includes('planilla') || fileName.includes('seguridad') || fileName.includes('pila') || fileName.includes('aporte');
 
             if (media && isPlanillaFile) {
-                const billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+                const contract = await resolveActiveContract(chatId, user);
+                const query = { user: user._id };
+                if (contract) query.contract = contract._id;
+                const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
                 if (billingPeriod) {
                     sessions.set(chatId, {
                         state: 'awaiting_period_planilla',
@@ -2315,13 +3371,28 @@ const handleIncomingMessage = async (message) => {
                 }
             }
 
-            await sendTelegramKeyboardMessage(chatId, `👋 Hola ${user.fullName}. ¿Qué deseas gestionar hoy?`, [
+            const buttons = [
                 [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
                 [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
                 [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
                 [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
-            ]);
+            ];
+
+            if (sessions.get(chatId)?.isOperator) {
+                buttons.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+            } else {
+                buttons.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+            }
+
+            const isOp = sessions.get(chatId)?.isOperator;
+            const greetingPrefix = isOp ? `🛡️ MODO OPERADOR (${sessions.get(chatId)?.operatorLabel})\n` : '';
+            await sendTelegramKeyboardMessage(chatId, `${greetingPrefix}👋 Funcionario en gestión: ${user.fullName}. ¿Qué deseas realizar?`, buttons);
         } else {
+            const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+            if (privilege) {
+                await showOperatorFuncionarioMenu(chatId, privilege);
+                return;
+            }
             sessions.set(chatId, { state: 'awaiting_identification' });
             await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
         }

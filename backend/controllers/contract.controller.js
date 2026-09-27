@@ -4,6 +4,23 @@ const { extractContractData, extractRpData, extractBankCertificateData, extractA
 const { filterSpecificObligations } = require('../utils/period.utils');
 const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
+const resolveContract = async (userId, contractId = null) => {
+    if (contractId) {
+        const c = await Contract.findOne({ _id: contractId, user: userId });
+        if (c) return c;
+    }
+    return await Contract.findOne({ user: userId }).sort({ createdAt: -1 });
+};
+
+exports.listMyContracts = async (req, res) => {
+    try {
+        const contracts = await Contract.find({ user: req.user._id }).sort({ createdAt: -1 });
+        res.json(contracts);
+    } catch (error) {
+        res.status(500).json({ message: 'Error al listar contratos', error: error.message });
+    }
+};
+
 exports.uploadBaseContract = async (req, res) => {
     try {
         if (!req.file) {
@@ -18,11 +35,28 @@ exports.uploadBaseContract = async (req, res) => {
             extractedData.activities = filterSpecificObligations(extractedData.activities);
         }
 
-        // 2. Save or Update in DB
-        let contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.body.contractId;
+        const isNewContract = req.body.isNewContract === 'true' || req.body.isNewContract === true;
+
+        let contract = null;
+        if (contractId) {
+            contract = await Contract.findOne({ _id: contractId, user: req.user._id });
+        } else if (!isNewContract) {
+            // Check if contract with same number already exists for user
+            if (extractedData.contractNumber) {
+                contract = await Contract.findOne({ user: req.user._id, contractNumber: extractedData.contractNumber });
+            }
+            if (!contract) {
+                const userContracts = await Contract.find({ user: req.user._id });
+                if (userContracts.length === 1 && !userContracts[0].contractNumber) {
+                    contract = userContracts[0];
+                }
+            }
+        }
 
         if (contract) {
             Object.assign(contract, extractedData, { baseDocumentPath: req.file.path });
+            if (extractedData.entityName) contract.entityName = extractedData.entityName;
             await contract.save();
         } else {
             contract = await Contract.create({
@@ -43,7 +77,8 @@ exports.uploadBaseContract = async (req, res) => {
 
 exports.getContract = async (req, res) => {
     try {
-        const contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.params.id || req.query.contractId;
+        const contract = await resolveContract(req.user._id, contractId);
         if (!contract) return res.status(404).json({ message: 'No se encontró información de contrato' });
         res.json(contract);
     } catch (error) {
@@ -53,7 +88,8 @@ exports.getContract = async (req, res) => {
 
 exports.uploadAttachments = async (req, res) => {
     try {
-        const contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.body.contractId || req.query.contractId;
+        const contract = await resolveContract(req.user._id, contractId);
         if (!contract) {
             return res.status(404).json({ message: 'Primero debe configurar su contrato base' });
         }
@@ -187,12 +223,12 @@ exports.uploadAttachments = async (req, res) => {
 
 exports.unlockBankCertificate = async (req, res) => {
     try {
-        const { password } = req.body;
+        const { password, contractId } = req.body;
         if (!password || !password.trim()) {
             return res.status(400).json({ message: 'Por favor ingresa la contraseña del certificado bancario' });
         }
 
-        const contract = await Contract.findOne({ user: req.user._id });
+        const contract = await resolveContract(req.user._id, contractId);
         if (!contract || !contract.bankCertificatePath) {
             return res.status(404).json({ message: 'No hay un certificado bancario cargado previamente' });
         }
@@ -241,12 +277,12 @@ exports.unlockBankCertificate = async (req, res) => {
 
 exports.unlockRut = async (req, res) => {
     try {
-        const { password } = req.body;
+        const { password, contractId } = req.body;
         if (!password || !password.trim()) {
             return res.status(400).json({ message: 'Por favor ingresa la contraseña del RUT' });
         }
 
-        const contract = await Contract.findOne({ user: req.user._id });
+        const contract = await resolveContract(req.user._id, contractId);
         if (!contract || !contract.rutPath) {
             return res.status(404).json({ message: 'No hay un RUT cargado previamente' });
         }
@@ -273,7 +309,7 @@ exports.unlockRut = async (req, res) => {
 
             return res.json({
                 success: true,
-                message: '¡RUT desbloqueado y procesado por IA con éxito! Datos fiscales actualizados.',
+                message: '¡RUT desbloqueado y procesado por IA con éxito! Datos del RUT actualizados.',
                 data: contract,
                 extracted: rutExtracted
             });
@@ -297,12 +333,14 @@ exports.unlockRut = async (req, res) => {
 
 exports.updateContract = async (req, res) => {
     try {
-        let contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = await resolveContract(req.user._id, contractId);
         if (!contract) {
             contract = new Contract({ user: req.user._id });
         }
 
         const allowedFields = [
+            'entityName', 'contractAlias', 'status',
             'contractorName', 'idNumber', 'contractType', 'contractNumber',
             'startDate', 'endDate', 'cdp', 'rp', 'rubro', 'totalValue',
             'paymentValue', 'bankName', 'accountNumber', 'paymentMethod',
@@ -344,8 +382,8 @@ exports.uploadRp = async (req, res) => {
         // Extract RP data with Gemini AI
         const rpData = await extractRpData(req.file.path);
 
-        // Find (or create) the user's contract and patch the RP fields
-        let contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = await resolveContract(req.user._id, contractId);
         if (!contract) {
             return res.status(400).json({ message: 'Primero debe subir el contrato base antes de cargar el RP' });
         }
@@ -380,8 +418,8 @@ exports.uploadAdditionContract = async (req, res) => {
         // 1. Extract data with Gemini
         const extractedData = await extractAdditionContractData(req.file.path);
 
-        // 2. Save or Update in DB
-        let contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = await resolveContract(req.user._id, contractId);
 
         if (!contract) {
             return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar una adición' });
@@ -415,8 +453,8 @@ exports.uploadAdditionRp = async (req, res) => {
         // Extract RP data with Gemini AI
         const rpData = await extractRpData(req.file.path);
 
-        // Find the user's contract and patch the addition RP fields
-        let contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = await resolveContract(req.user._id, contractId);
         if (!contract) {
             return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar el RP de adición' });
         }
@@ -449,7 +487,8 @@ exports.uploadActaInicio = async (req, res) => {
 
         const actaData = await extractActaInicioData(req.file.path);
 
-        let contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = await resolveContract(req.user._id, contractId);
         if (!contract) {
             return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar el Acta de Inicio' });
         }
@@ -477,7 +516,8 @@ exports.uploadActaInicio = async (req, res) => {
 
 exports.getEvidenceReminderStatus = async (req, res) => {
     try {
-        const contract = await Contract.findOne({ user: req.user._id });
+        const contractId = req.query.contractId;
+        const contract = await resolveContract(req.user._id, contractId);
         if (!contract) return res.json({ needsReminder: false });
         const status = await checkContractEvidenceStatus(contract, req.user);
         res.json(status || { needsReminder: false });

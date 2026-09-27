@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText,
     Shield, Plus, Trash2, AlertCircle, Package, Download,
-    MessageCircle, Clock, Sparkles
+    MessageCircle, Clock, RefreshCw
 } from 'lucide-react';
 
 const STEP_LABELS = [
@@ -459,8 +459,8 @@ export default function BillingForm({ contract, onComplete }) {
                                                             opacity: !act.comment?.trim() ? 0.6 : 1
                                                         }}
                                                     >
-                                                        <Sparkles size={13} />
-                                                        {improvingIdx === idx ? 'Redactando con IA...' : '✨ Mejorar con IA (30-50 palabras)'}
+                                                        <RefreshCw size={13} />
+                                                        {improvingIdx === idx ? 'Redactando con IA...' : 'Mejorar con IA (30-50 palabras)'}
                                                     </button>
                                                 </div>
                                                 <textarea
@@ -479,7 +479,7 @@ export default function BillingForm({ contract, onComplete }) {
                                                                 color: inRange ? 'var(--success)' : 'var(--text-muted)',
                                                                 fontWeight: inRange ? 600 : 400
                                                             }}>
-                                                                {count} palabras {inRange ? '✓ (rango ideal)' : ''}
+                                                                {count} palabras {inRange ? '(rango ideal)' : ''}
                                                             </span>
                                                         );
                                                     })()}
@@ -535,7 +535,7 @@ export default function BillingForm({ contract, onComplete }) {
                                 textAlign: 'center'
                             }}>
                                 <p style={{ fontSize: '0.875rem', fontWeight: 600, margin: 0 }}>
-                                    🚀 Carga de Planilla Inteligente por IA
+                                    Carga de Planilla Inteligente por IA
                                 </p>
                                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, maxWidth: '480px' }}>
                                     Sube tu planilla de aportes de seguridad social (PDF) de este mes para que la IA extraiga el operador, planilla, periodo y valores pagados automáticamente.

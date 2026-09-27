@@ -6,6 +6,10 @@ const accountSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    contract: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Contract'
+    },
     activity: {
         type: String,
         required: true

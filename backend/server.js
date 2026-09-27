@@ -47,7 +47,14 @@ const connectMongoWithRetry = () => {
     mongoose.connect(mongoUri, {
         serverSelectionTimeoutMS: 5000,
     })
-    .then(() => console.log('✅ Connected to MongoDB safely'))
+    .then(async () => {
+        console.log('✅ Connected to MongoDB safely');
+        try {
+            // Safely drop obsolete unique index on contracts.user to allow multiple contracts per user
+            await mongoose.connection.db.collection('contracts').dropIndex('user_1');
+            console.log('ℹ️ Índice único user_1 en contracts removido con éxito para soporte multi-contrato');
+        } catch (_) {}
+    })
     .catch(err => {
         console.error('⚠️ MongoDB Connection Error:', err.message);
         console.log('⏳ Reintentando conexión a MongoDB en 5 segundos...');

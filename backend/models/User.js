@@ -33,6 +33,14 @@ const userSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    isPaymentExempt: {
+        type: Boolean,
+        default: false
+    },
+    exemptReason: {
+        type: String,
+        default: ''
+    },
     createdAt: {
         type: Date,
         default: Date.now

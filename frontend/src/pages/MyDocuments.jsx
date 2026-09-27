@@ -178,7 +178,7 @@ const MyDocuments = () => {
                                         </span>
                                         <span>ZIP:</span>
                                         <span style={{ color: period.zipPath ? 'var(--success)' : 'var(--text-muted)' }}>
-                                            {period.zipPath ? '✓ Disponible' : 'No generado'}
+                                            {period.zipPath ? 'Disponible' : 'No generado'}
                                         </span>
                                     </div>
 

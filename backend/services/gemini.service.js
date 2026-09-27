@@ -46,6 +46,7 @@ exports.extractContractData = async (filePath) => {
             Extrae SOLO los campos que encuentres. Si no encuentras un dato, déjalo como string vacío "".
             
             Campos requeridos:
+            - entityName (Nombre de la entidad territorial, alcaldía o gobernación contratante, ej: "Alcaldía de Armenia", "Gobernación del Quindío", "Alcaldía de Pereira")
             - contractorName (Nombre completo o Razón Social del contratista)
             - idNumber (Número de identificación, Cédula o NIT)
             - contractType (Clase o tipo de contrato, ej: Prestación de Servicios de Apoyo a la Gestión o Profesionales)

@@ -6,6 +6,10 @@ const billingPeriodSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    contract: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Contract'
+    },
     actNumber: {
         type: Number,
         required: true,
@@ -76,6 +80,27 @@ const billingPeriodSchema = new mongoose.Schema({
         type: String,
         enum: ['pending', 'approved', 'rejected'],
         default: 'pending'
+    },
+    isPaid: {
+        type: Boolean,
+        default: false
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['free_trial', 'paid', 'pending_payment', 'exempt'],
+        default: 'pending_payment'
+    },
+    paymentDate: {
+        type: Date,
+        default: null
+    },
+    paymentAmount: {
+        type: Number,
+        default: 0
+    },
+    paymentNotes: {
+        type: String,
+        default: ""
     },
     zipPath: {
         type: String,

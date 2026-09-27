@@ -4,8 +4,20 @@ const contractSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
-        unique: true
+        required: true
+    },
+    entityName: {
+        type: String,
+        default: "Alcaldía de Armenia"
+    },
+    contractAlias: {
+        type: String,
+        default: ""
+    },
+    status: {
+        type: String,
+        enum: ['active', 'finished'],
+        default: 'active'
     },
     contractorName: String,
     idNumber: String,

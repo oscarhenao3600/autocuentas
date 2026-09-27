@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import api from '../utils/api';
 import { filterSpecificObligations } from '../utils/period.utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText, Calendar, Plus, Trash2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText, Calendar, Plus, Trash2, RefreshCw } from 'lucide-react';
 
 const EvidenceForm = ({ onComplete, contract }) => {
     const [step, setStep] = useState(1);
@@ -123,7 +123,7 @@ const EvidenceForm = ({ onComplete, contract }) => {
                                 </select>
                                 {activities.length === 0 && (
                                     <p style={{ color: 'var(--error)', fontSize: '0.825rem', marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                        ⚠️ No has configurado actividades en tu minuta. Ve a "Configuración de Contrato Base" para agregarlas.
+                                        No has configurado actividades en tu minuta. Ve a "Configuración de Contrato Base" para agregarlas.
                                     </p>
                                 )}
                             </div>
@@ -182,8 +182,8 @@ const EvidenceForm = ({ onComplete, contract }) => {
                                             opacity: !formData.description?.trim() ? 0.6 : 1
                                         }}
                                     >
-                                        <Sparkles size={13} />
-                                        {improving ? 'Redactando con IA...' : '✨ Mejorar con IA (30-50 palabras)'}
+                                        <RefreshCw size={13} />
+                                        {improving ? 'Redactando con IA...' : 'Mejorar con IA (30-50 palabras)'}
                                     </button>
                                 </div>
                                 <textarea 
@@ -203,7 +203,7 @@ const EvidenceForm = ({ onComplete, contract }) => {
                                                 color: inRange ? 'var(--success)' : 'var(--text-muted)',
                                                 fontWeight: inRange ? 600 : 400
                                             }}>
-                                                {count} palabras {inRange ? '✓ (rango ideal)' : ''}
+                                                {count} palabras {inRange ? '(rango ideal)' : ''}
                                             </span>
                                         );
                                     })()}

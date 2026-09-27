@@ -3,6 +3,7 @@ const router = express.Router();
 const { 
     uploadBaseContract, 
     getContract, 
+    listMyContracts,
     uploadAttachments, 
     updateContract, 
     uploadRp, 
@@ -17,8 +18,11 @@ const { protect } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
 
 router.get('/reminder-status', protect, getEvidenceReminderStatus);
+router.get('/list', protect, listMyContracts);
+router.get('/all', protect, listMyContracts);
 router.post('/upload-base', protect, upload.single('contractFile'), uploadBaseContract);
 router.get('/', protect, getContract);
+router.get('/:id', protect, getContract);
 router.put('/', protect, updateContract);
 
 // New route for additional attachments

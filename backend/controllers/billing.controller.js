@@ -188,23 +188,29 @@ exports.saveBillingPeriod = async (req, res) => {
             ssPath = req.files['securitySocialFile'][0].path;
         }
 
-        // Upsert: one draft per actNumber per user (status pending)
-        let period = await BillingPeriod.findOne({
+        // Upsert: one draft per actNumber per contract per user (status pending)
+        const contractId = req.body.contractId;
+        const query = {
             user: req.user._id,
             actNumber: parseInt(actNumber) || 1,
             status: 'pending'
-        });
+        };
+        if (contractId) query.contract = contractId;
+
+        let period = await BillingPeriod.findOne(query);
 
         if (period) {
             period.periodFrom    = periodFrom   || period.periodFrom;
             period.periodTo      = periodTo     || period.periodTo;
             period.activities    = parsedActivities || period.activities;
             period.securitySocial = parsedSS    || period.securitySocial;
+            if (contractId && !period.contract) period.contract = contractId;
             if (ssPath) period.securitySocialPath = ssPath;
             await period.save();
         } else {
             period = await BillingPeriod.create({
                 user:           req.user._id,
+                contract:       contractId || null,
                 actNumber:      parseInt(actNumber) || 1,
                 periodFrom,
                 periodTo,
@@ -215,7 +221,9 @@ exports.saveBillingPeriod = async (req, res) => {
         }
 
         if (ssPath) {
-            await Contract.findOneAndUpdate({ user: req.user._id }, { securitySocialPath: ssPath });
+            const contractQuery = { user: req.user._id };
+            if (contractId) contractQuery._id = contractId;
+            await Contract.findOneAndUpdate(contractQuery, { securitySocialPath: ssPath });
         }
 
         res.json({ message: 'Borrador guardado correctamente', data: period });
@@ -232,7 +240,13 @@ const generateBillingPackage = async (periodId, userId) => {
     const period = await BillingPeriod.findOne({ _id: periodId, user: userId });
     if (!period) throw new Error('Periodo no encontrado');
 
-    const contract = await Contract.findOne({ user: userId });
+    let contract = null;
+    if (period.contract) {
+        contract = await Contract.findById(period.contract);
+    }
+    if (!contract) {
+        contract = await Contract.findOne({ user: userId }).sort({ createdAt: -1 });
+    }
     if (!contract) throw new Error('Debe configurar su contrato antes de generar el paquete');
 
     const user = await User.findById(userId).select('-password');

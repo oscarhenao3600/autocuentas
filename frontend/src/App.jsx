@@ -4,12 +4,11 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-import ContractSetup from './pages/ContractSetup';
-import MyDocuments from './pages/MyDocuments';
 import PendingAccounts from './pages/PendingAccounts';
 import ConfigureFormats from './pages/ConfigureFormats';
 import ContractorsList from './pages/ContractorsList';
 import AdminDocuments from './pages/AdminDocuments';
+import TelegramPrivileges from './pages/TelegramPrivileges';
 
 const ProtectedRoute = ({ children }) => {
     const { user, loading } = useAuth();
@@ -27,11 +26,7 @@ function App() {
                     <Route path="/register" element={<Register />} />
                     <Route 
                         path="/contract-setup" 
-                        element={
-                            <ProtectedRoute>
-                                <ContractSetup />
-                            </ProtectedRoute>
-                        } 
+                        element={<Navigate to="/dashboard" replace />} 
                     />
                     <Route 
                         path="/dashboard" 
@@ -43,11 +38,7 @@ function App() {
                     />
                     <Route 
                         path="/my-documents" 
-                        element={
-                            <ProtectedRoute>
-                                <MyDocuments />
-                            </ProtectedRoute>
-                        } 
+                        element={<Navigate to="/dashboard" replace />} 
                     />
                     <Route 
                         path="/admin/accounts" 
@@ -86,6 +77,14 @@ function App() {
                         element={
                             <ProtectedRoute>
                                 <AdminDocuments />
+                            </ProtectedRoute>
+                        } 
+                    />
+                    <Route 
+                        path="/admin/telegram" 
+                        element={
+                            <ProtectedRoute>
+                                <TelegramPrivileges />
                             </ProtectedRoute>
                         } 
                     />

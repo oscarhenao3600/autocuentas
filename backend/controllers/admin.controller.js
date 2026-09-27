@@ -4,6 +4,7 @@ const Account = require('../models/Account');
 const User = require('../models/User');
 const Contract = require('../models/Contract');
 const BillingPeriod = require('../models/BillingPeriod');
+const TelegramPrivilege = require('../models/TelegramPrivilege');
 
 const TEMPLATES_DIR = path.resolve(__dirname, '..', 'templates');
 
@@ -41,12 +42,16 @@ exports.getRegisteredContractors = async (req, res) => {
             _id: { $ne: req.user._id },
             role: { $ne: 'admin' }
         }).select('-password').sort({ createdAt: -1 });
-        const contracts = await Contract.find();
+        const contracts = await Contract.find().sort({ createdAt: -1 });
         const billingPeriods = await BillingPeriod.find();
 
         const contractMap = new Map();
         contracts.forEach(c => {
-            if (c.user) contractMap.set(c.user.toString(), c);
+            if (c.user) {
+                const uid = c.user.toString();
+                if (!contractMap.has(uid)) contractMap.set(uid, []);
+                contractMap.get(uid).push(c);
+            }
         });
 
         const billingMap = new Map();
@@ -59,7 +64,8 @@ exports.getRegisteredContractors = async (req, res) => {
         });
 
         const contractors = users.map(u => {
-            const contract = contractMap.get(u._id.toString()) || null;
+            const userContracts = contractMap.get(u._id.toString()) || [];
+            const primaryContract = userContracts[0] || null;
             const periods = billingMap.get(u._id.toString()) || [];
 
             return {
@@ -69,29 +75,55 @@ exports.getRegisteredContractors = async (req, res) => {
                 role: u.role,
                 telegramChatId: u.telegramChatId,
                 telegramLinked: Boolean(u.telegramChatId),
-                cedula: contract?.idNumber || 'Sin cédula registrada',
-                contractorName: contract?.contractorName || u.fullName,
-                contractNumber: contract?.contractNumber || 'Sin contrato',
-                contractType: contract?.contractType || 'Prestación de Servicios',
-                monthlyValue: contract?.monthlyValue || '',
-                totalValue: contract?.totalValue || '',
-                supervisorName: contract?.supervisorName || 'No asignado',
-                supervisorDependency: contract?.supervisorDependency || 'Secretaría de Planeación',
-                startDate: contract?.startDate || '',
-                endDate: contract?.endDate || '',
-                contractorPhone: contract?.contractorPhone || '',
-                contractorAddress: contract?.contractorAddress || '',
-                bankName: contract?.bankName || '',
-                accountNumber: contract?.accountNumber || '',
-                paymentMethod: contract?.paymentMethod || '',
-                cdp: contract?.cdp || '',
-                rp: contract?.rp || '',
-                rubro: contract?.rubro || '',
-                activitiesCount: contract?.activities ? contract.activities.length : 0,
-                hasContract: Boolean(contract),
+                cedula: primaryContract?.idNumber || 'Sin cédula registrada',
+                contractorName: primaryContract?.contractorName || u.fullName,
+                contractNumber: primaryContract?.contractNumber || 'Sin contrato',
+                entityName: primaryContract?.entityName || primaryContract?.supervisorDependency || 'Alcaldía de Armenia',
+                contractsCount: userContracts.length,
+                contracts: userContracts.map(c => ({
+                    _id: c._id,
+                    contractNumber: c.contractNumber,
+                    entityName: c.entityName || c.supervisorDependency || 'Alcaldía',
+                    supervisorDependency: c.supervisorDependency,
+                    supervisorName: c.supervisorName,
+                    startDate: c.startDate,
+                    endDate: c.endDate,
+                    totalValue: c.totalValue,
+                    monthlyValue: c.monthlyValue,
+                    status: c.status || 'active',
+                    activitiesCount: c.activities ? c.activities.length : 0
+                })),
+                contractType: primaryContract?.contractType || 'Prestación de Servicios',
+                monthlyValue: primaryContract?.monthlyValue || '',
+                totalValue: primaryContract?.totalValue || '',
+                supervisorName: primaryContract?.supervisorName || 'No asignado',
+                supervisorDependency: primaryContract?.supervisorDependency || 'Secretaría de Planeación',
+                startDate: primaryContract?.startDate || '',
+                endDate: primaryContract?.endDate || '',
+                contractorPhone: primaryContract?.contractorPhone || '',
+                contractorAddress: primaryContract?.contractorAddress || '',
+                bankName: primaryContract?.bankName || '',
+                accountNumber: primaryContract?.accountNumber || '',
+                paymentMethod: primaryContract?.paymentMethod || '',
+                cdp: primaryContract?.cdp || '',
+                rp: primaryContract?.rp || '',
+                rubro: primaryContract?.rubro || '',
+                activitiesCount: primaryContract?.activities ? primaryContract.activities.length : 0,
+                hasContract: userContracts.length > 0,
+                isPaymentExempt: Boolean(u.isPaymentExempt),
+                exemptReason: u.exemptReason || '',
                 periodsTotal: periods.length,
                 periodsApproved: periods.filter(p => p.status === 'approved').length,
                 periodsPending: periods.filter(p => p.status === 'pending').length,
+                periodsList: periods.map(p => ({
+                    _id: p._id,
+                    actNumber: p.actNumber,
+                    status: p.status,
+                    isPaid: p.isPaid || p.actNumber === 1 || Boolean(u.isPaymentExempt),
+                    paymentStatus: u.isPaymentExempt ? 'exempt' : (p.actNumber === 1 ? 'free_trial' : (p.isPaid ? 'paid' : (p.paymentStatus || 'pending_payment'))),
+                    paymentDate: p.paymentDate,
+                    paymentAmount: p.paymentAmount
+                })),
                 createdAt: u.createdAt
             };
         });
@@ -107,6 +139,7 @@ exports.getAllAccounts = async (req, res) => {
     try {
         const accounts = await Account.find()
             .populate('user', 'fullName email')
+            .populate('contract', 'contractNumber entityName supervisorDependency contractorName')
             .sort({ createdAt: -1 });
         res.json(accounts);
     } catch (error) {
@@ -269,6 +302,154 @@ exports.deleteUser = async (req, res) => {
     }
 };
 
+// POST /api/admin/users → Register a new contractor/official directly from admin panel
+exports.createContractor = async (req, res) => {
+    try {
+        const {
+            fullName,
+            cedula,
+            email,
+            password,
+            contractNumber,
+            entityName,
+            monthlyValue,
+            totalValue,
+            supervisorName,
+            supervisorDependency,
+            contractorPhone,
+            contractorAddress
+        } = req.body;
+
+        if (!fullName || !String(fullName).trim()) {
+            return res.status(400).json({ message: 'El nombre completo es obligatorio' });
+        }
+        if (!cedula || !String(cedula).trim()) {
+            return res.status(400).json({ message: 'La cédula de ciudadanía es obligatoria' });
+        }
+
+        const cleanCedula = String(cedula).replace(/\D/g, '');
+        const cleanEmail = email && String(email).trim() 
+            ? String(email).trim().toLowerCase() 
+            : `contratista.${cleanCedula}@sistema.gov.co`;
+
+        // Check if user with email already exists
+        let user = await User.findOne({ email: cleanEmail });
+        if (user && user.role === 'admin') {
+            return res.status(400).json({ message: 'No se puede asociar un contratista a una cuenta de administrador existente' });
+        }
+
+        const defaultPassword = password && String(password).length >= 8 
+            ? password 
+            : `Contratista.${cleanCedula}*`;
+
+        if (!user) {
+            user = await User.create({
+                fullName: fullName.trim(),
+                email: cleanEmail,
+                password: defaultPassword,
+                role: 'client'
+            });
+        }
+
+        // Check if contract with contractNumber already exists
+        const cleanContractNumber = contractNumber && String(contractNumber).trim() 
+            ? String(contractNumber).trim() 
+            : `CPS-${cleanCedula.slice(-4)}-2026`;
+
+        const newContract = await Contract.create({
+            user: user._id,
+            idNumber: cleanCedula,
+            contractorName: fullName.trim(),
+            contractNumber: cleanContractNumber,
+            entityName: entityName ? entityName.trim() : 'Alcaldía de Armenia',
+            monthlyValue: monthlyValue ? String(monthlyValue).trim() : '',
+            totalValue: totalValue ? String(totalValue).trim() : '',
+            supervisorName: supervisorName ? supervisorName.trim() : 'No asignado',
+            supervisorDependency: supervisorDependency ? supervisorDependency.trim() : 'Secretaría de Planeación',
+            contractorPhone: contractorPhone ? String(contractorPhone).trim() : '',
+            contractorAddress: contractorAddress ? String(contractorAddress).trim() : '',
+            status: 'active'
+        });
+
+        res.status(201).json({
+            message: `Funcionario / Contratista "${user.fullName}" (C.C. ${cleanCedula}) registrado con éxito`,
+            contractor: {
+                _id: user._id,
+                fullName: user.fullName,
+                email: user.email,
+                role: user.role,
+                cedula: cleanCedula,
+                contractorName: user.fullName,
+                contractNumber: newContract.contractNumber,
+                entityName: newContract.entityName,
+                contractsCount: 1,
+                hasContract: true,
+                monthlyValue: newContract.monthlyValue,
+                totalValue: newContract.totalValue,
+                supervisorName: newContract.supervisorName,
+                supervisorDependency: newContract.supervisorDependency
+            }
+        });
+    } catch (error) {
+        console.error('Error al registrar nuevo contratista:', error);
+        res.status(500).json({ message: 'Error al registrar el contratista', error: error.message });
+    }
+};
+
+// PATCH /api/admin/users/:id/toggle-exempt → Toggle contractor payment exemption
+exports.toggleUserExemption = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ message: 'Usuario no encontrado' });
+
+        user.isPaymentExempt = !user.isPaymentExempt;
+        if (!user.isPaymentExempt) {
+            user.exemptReason = '';
+        } else if (req.body.exemptReason) {
+            user.exemptReason = String(req.body.exemptReason).trim();
+        }
+
+        await user.save();
+
+        res.json({
+            message: `Funcionario "${user.fullName}" ahora está ${user.isPaymentExempt ? 'EXENTO de pago (Sin Costo)' : 'sujeto a cobro normal a partir de Acta 2'}`,
+            isPaymentExempt: user.isPaymentExempt,
+            exemptReason: user.exemptReason
+        });
+    } catch (error) {
+        console.error('Error al cambiar exención de pago:', error);
+        res.status(500).json({ message: 'Error al cambiar estado de exención', error: error.message });
+    }
+};
+
+// PATCH /api/admin/periods/:id/toggle-paid → Mark specific act/period as paid/enabled
+exports.togglePeriodPayment = async (req, res) => {
+    try {
+        const period = await BillingPeriod.findById(req.params.id);
+        if (!period) return res.status(404).json({ message: 'Periodo no encontrado' });
+
+        period.isPaid = !period.isPaid;
+        period.paymentStatus = period.isPaid ? 'paid' : (period.actNumber === 1 ? 'free_trial' : 'pending_payment');
+        if (period.isPaid) {
+            period.paymentDate = new Date();
+            if (req.body.paymentAmount) period.paymentAmount = Number(req.body.paymentAmount);
+            if (req.body.paymentNotes) period.paymentNotes = String(req.body.paymentNotes).trim();
+        } else {
+            period.paymentDate = null;
+        }
+
+        await period.save();
+
+        res.json({
+            message: `Acta N° ${period.actNumber} marcada como ${period.isPaid ? 'PAGADA / HABILITADA' : 'PENDIENTE DE PAGO'}`,
+            period
+        });
+    } catch (error) {
+        console.error('Error al actualizar estado de pago:', error);
+        res.status(500).json({ message: 'Error al actualizar estado de pago', error: error.message });
+    }
+};
+
 // ──────────────────────────────────────────────────────────────
 // FILE RESOLVER HELPERS FOR ADMIN DOCUMENT MANAGEMENT
 // ──────────────────────────────────────────────────────────────
@@ -388,7 +569,8 @@ exports.getAllDocuments = async (req, res) => {
                             fullName: contractorUser.fullName,
                             email: contractorUser.email,
                             cedula: contract.idNumber || 'Sin cédula',
-                            contractNumber: contract.contractNumber || 'Sin contrato'
+                            contractNumber: contract.contractNumber || 'Sin contrato',
+                            entityName: contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'
                         },
                         target: {
                             targetId: contract._id,
@@ -405,9 +587,12 @@ exports.getAllDocuments = async (req, res) => {
             const contractorUser = userMap.get(bp.user?.toString());
             if (!contractorUser) return;
 
-            const contract = contracts.find(c => c.user?.toString() === bp.user?.toString());
+            const contract = bp.contract 
+                ? contracts.find(c => c._id.toString() === bp.contract.toString())
+                : contracts.find(c => c.user?.toString() === bp.user?.toString());
             const cedula = contract?.idNumber || 'Sin cédula';
             const contractNumber = contract?.contractNumber || 'Sin contrato';
+            const entityName = contract?.entityName || contract?.supervisorDependency || 'Alcaldía de Armenia';
 
             // 2.1 Security Social Planilla for this period
             if (bp.securitySocialPath && bp.securitySocialPath.trim()) {
@@ -434,7 +619,8 @@ exports.getAllDocuments = async (req, res) => {
                         fullName: contractorUser.fullName,
                         email: contractorUser.email,
                         cedula,
-                        contractNumber
+                        contractNumber,
+                        entityName
                     },
                     target: {
                         targetId: bp._id,
@@ -469,7 +655,8 @@ exports.getAllDocuments = async (req, res) => {
                         fullName: contractorUser.fullName,
                         email: contractorUser.email,
                         cedula,
-                        contractNumber
+                        contractNumber,
+                        entityName
                     },
                     target: {
                         targetId: bp._id,
@@ -506,7 +693,8 @@ exports.getAllDocuments = async (req, res) => {
                                         fullName: contractorUser.fullName,
                                         email: contractorUser.email,
                                         cedula,
-                                        contractNumber
+                                        contractNumber,
+                                        entityName
                                     },
                                     target: {
                                         targetId: bp._id,
@@ -631,3 +819,222 @@ exports.deleteDocument = async (req, res) => {
         res.status(500).json({ message: 'Error al eliminar el documento', error: error.message });
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// TELEGRAM PRIVILEGES MANAGEMENT (OPERADORES MULTICUENTA)
+// ──────────────────────────────────────────────────────────────
+
+// GET /api/admin/telegram-privileges
+exports.getTelegramPrivileges = async (req, res) => {
+    try {
+        const privileges = await TelegramPrivilege.find()
+            .populate('assignedUsers', 'fullName email role')
+            .populate('createdBy', 'fullName email')
+            .sort({ createdAt: -1 });
+
+        // Enrich assignedUsers with contract info (cédula, contractNumber, entityName)
+        const allContracts = await Contract.find().select('user idNumber contractNumber entityName');
+        const contractMap = new Map();
+        allContracts.forEach(c => {
+            if (c.user) contractMap.set(c.user.toString(), c);
+        });
+
+        const formatted = privileges.map(p => {
+            const enrichedAssigned = (p.assignedUsers || []).map(u => {
+                const c = contractMap.get(u._id.toString());
+                return {
+                    _id: u._id,
+                    fullName: u.fullName,
+                    email: u.email,
+                    cedula: c?.idNumber || 'Sin cédula',
+                    contractNumber: c?.contractNumber || 'En trámite',
+                    entityName: c?.entityName || 'Alcaldía'
+                };
+            });
+
+            return {
+                _id: p._id,
+                telegramChatId: p.telegramChatId,
+                label: p.label,
+                description: p.description,
+                scope: p.scope,
+                operatorType: p.operatorType || 'standard',
+                monthlyAccountsLimit: p.monthlyAccountsLimit || 15,
+                accountsUsedThisMonth: p.accountsUsedThisMonth || 0,
+                currentMonthCycle: p.currentMonthCycle,
+                preferentialRate: p.preferentialRate || 20000,
+                assignedUsers: enrichedAssigned,
+                canRegisterFuncionarios: p.canRegisterFuncionarios,
+                isActive: p.isActive,
+                createdBy: p.createdBy ? { fullName: p.createdBy.fullName, email: p.createdBy.email } : null,
+                lastActiveAt: p.lastActiveAt,
+                createdAt: p.createdAt
+            };
+        });
+
+        res.json(formatted);
+    } catch (error) {
+        console.error('Error al obtener privilegios de Telegram:', error);
+        res.status(500).json({ message: 'Error al obtener privilegios de Telegram', error: error.message });
+    }
+};
+
+// POST /api/admin/telegram-privileges
+exports.createTelegramPrivilege = async (req, res) => {
+    try {
+        let {
+            telegramChatId,
+            label,
+            description,
+            scope,
+            assignedUsers,
+            operatorType,
+            monthlyAccountsLimit,
+            preferentialRate,
+            canRegisterFuncionarios,
+            isActive
+        } = req.body;
+
+        if (!telegramChatId || !String(telegramChatId).trim()) {
+            return res.status(400).json({ message: 'El ID de Telegram es obligatorio' });
+        }
+        if (!label || !String(label).trim()) {
+            return res.status(400).json({ message: 'El nombre o alias del operador es obligatorio' });
+        }
+
+        const cleanChatId = String(telegramChatId).trim();
+
+        // Check if chatId already registered
+        const existing = await TelegramPrivilege.findOne({ telegramChatId: cleanChatId });
+        if (existing) {
+            return res.status(400).json({ message: `El ID de Telegram "${cleanChatId}" ya tiene privilegios registrados con el nombre "${existing.label}". Puedes editarlo en lugar de crearlo de nuevo.` });
+        }
+
+        const privilege = await TelegramPrivilege.create({
+            telegramChatId: cleanChatId,
+            label: label.trim(),
+            description: (description || '').trim(),
+            scope: scope === 'specific' ? 'specific' : 'all',
+            operatorType: ['exempt', 'provider', 'standard'].includes(operatorType) ? operatorType : 'standard',
+            monthlyAccountsLimit: Number(monthlyAccountsLimit) > 0 ? Number(monthlyAccountsLimit) : 15,
+            preferentialRate: Number(preferentialRate) >= 0 ? Number(preferentialRate) : 20000,
+            assignedUsers: scope === 'specific' && Array.isArray(assignedUsers) ? assignedUsers : [],
+            canRegisterFuncionarios: typeof canRegisterFuncionarios === 'boolean' ? canRegisterFuncionarios : true,
+            isActive: typeof isActive === 'boolean' ? isActive : true,
+            createdBy: req.user._id
+        });
+
+        res.status(201).json({
+            message: `Privilegio de Telegram asignado con éxito a "${privilege.label}" (${privilege.telegramChatId})`,
+            privilege
+        });
+    } catch (error) {
+        console.error('Error al crear privilegio de Telegram:', error);
+        res.status(500).json({ message: 'Error al guardar privilegio de Telegram', error: error.message });
+    }
+};
+
+// PUT /api/admin/telegram-privileges/:id
+exports.updateTelegramPrivilege = async (req, res) => {
+    try {
+        const {
+            label,
+            description,
+            scope,
+            assignedUsers,
+            operatorType,
+            monthlyAccountsLimit,
+            preferentialRate,
+            canRegisterFuncionarios,
+            isActive,
+            telegramChatId,
+            resetMonthlyUsage
+        } = req.body;
+        const privilege = await TelegramPrivilege.findById(req.params.id);
+
+        if (!privilege) {
+            return res.status(404).json({ message: 'Registro de privilegio no encontrado' });
+        }
+
+        if (telegramChatId && String(telegramChatId).trim() !== privilege.telegramChatId) {
+            const cleanChatId = String(telegramChatId).trim();
+            const duplicate = await TelegramPrivilege.findOne({ telegramChatId: cleanChatId, _id: { $ne: privilege._id } });
+            if (duplicate) {
+                return res.status(400).json({ message: `El ID de Telegram "${cleanChatId}" ya pertenece a otro registro (${duplicate.label})` });
+            }
+            privilege.telegramChatId = cleanChatId;
+        }
+
+        if (label) privilege.label = label.trim();
+        if (typeof description === 'string') privilege.description = description.trim();
+        if (scope) privilege.scope = scope;
+        if (scope === 'specific') {
+            privilege.assignedUsers = Array.isArray(assignedUsers) ? assignedUsers : [];
+        } else if (scope === 'all') {
+            privilege.assignedUsers = [];
+        }
+        if (operatorType && ['exempt', 'provider', 'standard'].includes(operatorType)) {
+            privilege.operatorType = operatorType;
+        }
+        if (Number(monthlyAccountsLimit) > 0) {
+            privilege.monthlyAccountsLimit = Number(monthlyAccountsLimit);
+        }
+        if (Number(preferentialRate) >= 0) {
+            privilege.preferentialRate = Number(preferentialRate);
+        }
+        if (resetMonthlyUsage) {
+            privilege.accountsUsedThisMonth = 0;
+        }
+        if (typeof canRegisterFuncionarios === 'boolean') privilege.canRegisterFuncionarios = canRegisterFuncionarios;
+        if (typeof isActive === 'boolean') privilege.isActive = isActive;
+
+        await privilege.save();
+
+        res.json({
+            message: `Privilegios de "${privilege.label}" actualizados correctamente`,
+            privilege
+        });
+    } catch (error) {
+        console.error('Error al actualizar privilegio de Telegram:', error);
+        res.status(500).json({ message: 'Error al actualizar privilegio', error: error.message });
+    }
+};
+
+// PATCH /api/admin/telegram-privileges/:id/toggle
+exports.toggleTelegramPrivilege = async (req, res) => {
+    try {
+        const privilege = await TelegramPrivilege.findById(req.params.id);
+        if (!privilege) {
+            return res.status(404).json({ message: 'Privilegio no encontrado' });
+        }
+
+        privilege.isActive = !privilege.isActive;
+        await privilege.save();
+
+        res.json({
+            message: `Estado de "${privilege.label}" cambiado a ${privilege.isActive ? 'ACTIVO' : 'INACTIVO'}`,
+            isActive: privilege.isActive
+        });
+    } catch (error) {
+        console.error('Error al cambiar estado de privilegio:', error);
+        res.status(500).json({ message: 'Error al cambiar estado', error: error.message });
+    }
+};
+
+// DELETE /api/admin/telegram-privileges/:id
+exports.deleteTelegramPrivilege = async (req, res) => {
+    try {
+        const privilege = await TelegramPrivilege.findByIdAndDelete(req.params.id);
+        if (!privilege) {
+            return res.status(404).json({ message: 'Privilegio no encontrado' });
+        }
+
+        res.json({
+            message: `Privilegio de Telegram para "${privilege.label}" (${privilege.telegramChatId}) eliminado exitosamente`
+        });
+    } catch (error) {
+        console.error('Error al eliminar privilegio:', error);
+        res.status(500).json({ message: 'Error al eliminar privilegio', error: error.message });
+    }
+};
+

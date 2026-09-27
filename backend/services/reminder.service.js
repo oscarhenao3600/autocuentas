@@ -47,6 +47,7 @@ async function checkContractEvidenceStatus(contract, user) {
         if (diffDays >= 0 && diffDays <= 5 && now >= periodStart) {
             const billingPeriod = await BillingPeriod.findOne({
                 user: user._id,
+                contract: contract._id,
                 actNumber: p.actNumber
             });
 
@@ -59,13 +60,18 @@ async function checkContractEvidenceStatus(contract, user) {
 
             if (!hasEvidence) {
                 const contractorName = contract.contractorName || user.fullName || 'contratista';
-                const message = `hola ${contractorName} estamos a ${diffDays} dias para la fecha de entrega de la cuenta y aun no has subido ninguna evidencia`;
+                const contractDesc = contract.contractNumber 
+                    ? `del contrato Nº ${contract.contractNumber} (${contract.entityName || contract.supervisorDependency || 'Alcaldía'})`
+                    : `de tu contrato`;
+                const message = `📢 Hola ${contractorName}, estamos a ${diffDays} días para la fecha de entrega de la cuenta ${contractDesc} (Acta ${p.actNumber}) y aún no has subido evidencias.`;
 
                 return {
                     needsReminder: true,
                     daysRemaining: diffDays,
                     period: p,
                     actNumber: p.actNumber,
+                    contractId: contract._id,
+                    contractNumber: contract.contractNumber,
                     message,
                     contractorName
                 };
@@ -101,7 +107,11 @@ async function checkAndSendEvidenceReminders() {
                 // If user has a telegramChatId linked, send the reminder
                 if (user.telegramChatId) {
                     console.log(`📢 [ReminderService] Enviando recordatorio a ${status.contractorName} (Telegram: ${user.telegramChatId})...`);
-                    await sendTelegramMessage(user.telegramChatId, status.message);
+                    const { sendTelegramKeyboardMessage } = require('./telegram.service');
+                    const keyboard = [
+                        [{ text: `📂 Cargar Evidencias (${contract.contractNumber || 'Contrato'})`, callback_data: `select_contract_${contract._id}` }]
+                    ];
+                    await sendTelegramKeyboardMessage(user.telegramChatId, status.message, keyboard);
                 } else {
                     console.log(`ℹ️ [ReminderService] ${status.contractorName} no tiene Telegram vinculado aún.`);
                 }

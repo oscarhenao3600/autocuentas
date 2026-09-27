@@ -14,15 +14,15 @@ const seedAdmin = async () => {
         } else {
             const admin = new User({
                 fullName: 'Administrador Maestro',
-                email: 'oscarhenao3600@gmail.com',
-                password: 'Fg@uniquindio75510', // Recomiendo cambiarla después del primer login
+                email: 'formatoscuentas09@gmail.com',
+                password: 'Fg@uniquindio', // Recomiendo cambiarla después del primer login
                 role: 'admin'
             });
 
             await admin.save();
             console.log('🚀 Administrador inicial creado con éxito!');
-            console.log('📧 Email: oscarhenao3600@gmail.com');
-            console.log('🔑 Password: Fg@uniquindio75510');
+            console.log('📧 Email: formatoscuentas09@gmail.com');
+            console.log('🔑 Password: Fg@uniquindio');
         }
 
         mongoose.connection.close();
