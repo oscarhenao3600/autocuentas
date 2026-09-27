@@ -89,11 +89,18 @@ else
     fi
 fi
 
-# 6. Levantar contenedores
-echo "📦 Construyendo y levantando contenedores con $COMPOSE_CMD $SERVICES_TO_UP..."
+# 6. Sincronizar últimos cambios desde git
+if [ -d .git ] && command -v git &> /dev/null; then
+    echo "🔄 Obteniendo últimos cambios desde el repositorio git..."
+    git pull origin master || true
+fi
+
+# 7. Levantar contenedores asegurando compilación limpia del frontend
+echo "📦 Compilando y levantando contenedores con $COMPOSE_CMD..."
+$COMPOSE_CMD build --no-cache frontend
 $COMPOSE_CMD up -d --build $SERVICES_TO_UP
 
-# 7. Estado de los contenedores
+# 8. Estado de los contenedores
 echo ""
 echo "✅ Despliegue finalizado con éxito."
 $COMPOSE_CMD ps
