@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   mongodb:
     # mongo:4.4.18 es la versión oficial recomendada y compatible con Raspberry Pi 3 (ARMv8 Cortex-A53)
@@ -11,6 +17,7 @@ services:
     volumes:
       - mongodb_data:/data/db
     restart: unless-stopped
+    logging: *default-logging
     deploy:
       resources:
         limits:
@@ -35,6 +42,13 @@ services:
       - backend_generated:/app/generated
       - backend_templates:/app/templates
     restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
     deploy:
       resources:
         limits:
@@ -49,6 +63,7 @@ services:
       - "5173:80"
       - "3000:80"
     restart: unless-stopped
+    logging: *default-logging
     deploy:
       resources:
         limits:

@@ -72,6 +72,20 @@ app.get('/', (req, res) => {
     res.send('Formatos Cuentas API is running securely.');
 });
 
+// Production Health Check Endpoint
+app.get('/api/health', (req, res) => {
+    const isDbConnected = mongoose.connection.readyState === 1;
+    const mem = process.memoryUsage();
+    res.status(isDbConnected ? 200 : 503).json({
+        status: isDbConnected ? 'UP' : 'DEGRADED',
+        database: isDbConnected ? 'connected' : 'disconnected',
+        uptimeSeconds: Math.floor(process.uptime()),
+        memoryRssMB: Math.round(mem.rss / (1024 * 1024)),
+        memoryHeapUsedMB: Math.round(mem.heapUsed / (1024 * 1024)),
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Basic Error Handling
 app.use((err, req, res, next) => {
     console.error(err.stack);
