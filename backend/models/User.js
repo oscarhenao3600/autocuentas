@@ -41,6 +41,19 @@ const userSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    pricingPlan: {
+        type: String,
+        enum: ['standard', 'package'],
+        default: 'standard'
+    },
+    packageQuota: {
+        type: Number,
+        default: 0
+    },
+    packageAccountsUsed: {
+        type: Number,
+        default: 0
+    },
     createdAt: {
         type: Date,
         default: Date.now

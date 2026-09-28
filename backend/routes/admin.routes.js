@@ -17,7 +17,12 @@ const {
     createTelegramPrivilege,
     updateTelegramPrivilege,
     toggleTelegramPrivilege,
-    deleteTelegramPrivilege
+    deleteTelegramPrivilege,
+    getPaymentConfig,
+    updatePaymentConfig,
+    getAllPayments,
+    approvePaymentAdmin,
+    rejectPaymentAdmin
 } = require('../controllers/admin.controller');
 const { protect, admin } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
@@ -41,5 +46,12 @@ router.post('/telegram-privileges', protect, admin, createTelegramPrivilege);
 router.put('/telegram-privileges/:id', protect, admin, updateTelegramPrivilege);
 router.patch('/telegram-privileges/:id/toggle', protect, admin, toggleTelegramPrivilege);
 router.delete('/telegram-privileges/:id', protect, admin, deleteTelegramPrivilege);
+
+// Payment Configuration & Receipts
+router.get('/payment-config', protect, admin, getPaymentConfig);
+router.put('/payment-config', protect, admin, updatePaymentConfig);
+router.get('/payments', protect, admin, getAllPayments);
+router.patch('/payments/:id/approve', protect, admin, approvePaymentAdmin);
+router.patch('/payments/:id/reject', protect, admin, rejectPaymentAdmin);
 
 module.exports = router;

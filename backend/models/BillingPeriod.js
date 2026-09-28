@@ -106,6 +106,18 @@ const billingPeriodSchema = new mongoose.Schema({
         type: String,
         default: ""
     },
+    zipDownloaded: {
+        type: Boolean,
+        default: false
+    },
+    zipDownloadedAt: {
+        type: Date,
+        default: null
+    },
+    receipt: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PaymentReceipt'
+    },
     securitySocialPath: {
         type: String,
         default: ""

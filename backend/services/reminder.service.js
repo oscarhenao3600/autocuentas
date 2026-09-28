@@ -96,6 +96,14 @@ async function checkAndSendEvidenceReminders() {
             const user = contract.user;
             if (!user) continue;
 
+            // Automatically check and advance payment status for downloaded zips past periodTo
+            try {
+                const { checkAndAdvancePaymentStatus } = require('./telegram.service');
+                await checkAndAdvancePaymentStatus(user, contract);
+            } catch (payAdvErr) {
+                console.error(`⚠️ [ReminderService] Error verificando estado de pago para contrato ${contract.contractNumber}:`, payAdvErr.message);
+            }
+
             const status = await checkContractEvidenceStatus(contract, user);
             if (status && status.needsReminder) {
                 // Check if already notified today

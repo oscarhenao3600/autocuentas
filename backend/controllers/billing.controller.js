@@ -705,6 +705,11 @@ exports.downloadPackage = async (req, res) => {
             return res.status(404).json({ message: 'El paquete ZIP aún no ha sido generado. Por favor ejecute /generate primero.' });
         }
 
+        // Mark period as zip downloaded
+        period.zipDownloaded = true;
+        period.zipDownloadedAt = new Date();
+        await period.save();
+
         const fileName = path.basename(period.zipPath);
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Type', 'application/zip');

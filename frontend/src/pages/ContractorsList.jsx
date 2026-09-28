@@ -834,14 +834,14 @@ const ContractorsList = () => {
                                                     display: 'inline-flex',
                                                     alignItems: 'center'
                                                 }}>
-                                                    Cobro Estándar (Acta 1 Gratis, Acta 2+ Pago)
+                                                    Cobro Estándar ($60.000 COP / Acta)
                                                 </span>
                                             )}
                                         </div>
                                         <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', maxWidth: '420px', lineHeight: 1.4 }}>
                                             {selectedContractor.isPaymentExempt 
                                                 ? 'Este contratista puede generar y descargar todas sus actas y evidencias sin costo alguno.'
-                                                : 'El contratista puede radicar su Acta 1 gratis. Para cargar evidencias en Acta 2 en adelante requerirá pago.'}
+                                                : 'El contratista radica su Acta 1 gratis como cortesía. Para cargar evidencias en Acta 2 en adelante requerirá pago ($60.000 COP por acta o paquete de 5 x $100.000 COP).'}
                                         </p>
                                     </div>
 

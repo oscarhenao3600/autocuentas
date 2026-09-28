@@ -39,6 +39,14 @@ const telegramPrivilegeSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    packageQuota: {
+        type: Number,
+        default: 0
+    },
+    packageAccountsUsed: {
+        type: Number,
+        default: 0
+    },
     currentMonthCycle: {
         type: String,
         default: () => {

@@ -5,6 +5,8 @@ const User = require('../models/User');
 const Contract = require('../models/Contract');
 const BillingPeriod = require('../models/BillingPeriod');
 const TelegramPrivilege = require('../models/TelegramPrivilege');
+const PaymentConfig = require('../models/PaymentConfig');
+const PaymentReceipt = require('../models/PaymentReceipt');
 
 const TEMPLATES_DIR = path.resolve(__dirname, '..', 'templates');
 
@@ -1037,4 +1039,234 @@ exports.deleteTelegramPrivilege = async (req, res) => {
         res.status(500).json({ message: 'Error al eliminar privilegio', error: error.message });
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// PAYMENT CONFIGURATION & PAYMENT RECEIPT MANAGEMENT
+// ──────────────────────────────────────────────────────────────
+
+// GET /api/admin/payment-config
+exports.getPaymentConfig = async (req, res) => {
+    try {
+        const config = await PaymentConfig.getConfig();
+        res.json(config);
+    } catch (error) {
+        console.error('Error al obtener configuración de pagos:', error);
+        res.status(500).json({ message: 'Error al obtener configuración de pagos', error: error.message });
+    }
+};
+
+// PUT /api/admin/payment-config
+exports.updatePaymentConfig = async (req, res) => {
+    try {
+        const {
+            approvalTelegramChatId,
+            approvalTelegramChatIds,
+            contractorRate,
+            packageRate,
+            packageAccountsCount,
+            packageUnitRate,
+            paymentInstructions
+        } = req.body;
+
+        const config = await PaymentConfig.getConfig();
+
+        if (approvalTelegramChatId !== undefined) {
+            config.approvalTelegramChatId = String(approvalTelegramChatId).trim();
+        }
+        if (Array.isArray(approvalTelegramChatIds)) {
+            config.approvalTelegramChatIds = approvalTelegramChatIds.map(id => String(id).trim()).filter(Boolean);
+        }
+        if (contractorRate !== undefined && Number(contractorRate) >= 0) {
+            config.contractorRate = Number(contractorRate);
+        }
+        if (packageRate !== undefined && Number(packageRate) >= 0) {
+            config.packageRate = Number(packageRate);
+        }
+        if (packageAccountsCount !== undefined && Number(packageAccountsCount) > 0) {
+            config.packageAccountsCount = Number(packageAccountsCount);
+        }
+        if (packageUnitRate !== undefined && Number(packageUnitRate) >= 0) {
+            config.packageUnitRate = Number(packageUnitRate);
+        }
+        if (paymentInstructions && typeof paymentInstructions === 'object') {
+            config.paymentInstructions = {
+                ...config.paymentInstructions,
+                ...paymentInstructions
+            };
+        }
+
+        config.updatedBy = req.user._id;
+        config.updatedAt = new Date();
+        await config.save();
+
+        res.json({
+            message: 'Configuración de pagos y aprobaciones actualizada con éxito',
+            config
+        });
+    } catch (error) {
+        console.error('Error al actualizar configuración de pagos:', error);
+        res.status(500).json({ message: 'Error al actualizar configuración de pagos', error: error.message });
+    }
+};
+
+// GET /api/admin/payments
+exports.getAllPayments = async (req, res) => {
+    try {
+        const payments = await PaymentReceipt.find()
+            .populate('user', 'fullName email')
+            .populate('contract', 'contractNumber contractorName entityName')
+            .populate('billingPeriod', 'actNumber periodFrom periodTo isPaid paymentStatus')
+            .sort({ createdAt: -1 });
+
+        res.json(payments);
+    } catch (error) {
+        console.error('Error al listar comprobantes de pago:', error);
+        res.status(500).json({ message: 'Error al listar comprobantes de pago', error: error.message });
+    }
+};
+
+// PATCH /api/admin/payments/:id/approve
+exports.approvePaymentAdmin = async (req, res) => {
+    try {
+        const payment = await PaymentReceipt.findById(req.params.id)
+            .populate('user')
+            .populate('contract')
+            .populate('billingPeriod');
+
+        if (!payment) {
+            return res.status(404).json({ message: 'Comprobante de pago no encontrado' });
+        }
+
+        if (payment.status === 'approved') {
+            return res.status(400).json({ message: 'Este pago ya fue aprobado previamente' });
+        }
+
+        payment.status = 'approved';
+        payment.approvedAt = new Date();
+        payment.approvedBy = req.user.fullName || req.user.email;
+        payment.rejectionReason = '';
+        await payment.save();
+
+        let periodUpdated = null;
+
+        // If individual account payment
+        if (payment.paymentType === 'individual') {
+            let period = payment.billingPeriod;
+            if (!period && payment.user) {
+                const query = { user: payment.user._id, actNumber: payment.actNumber };
+                if (payment.contract) query.contract = payment.contract._id;
+                period = await BillingPeriod.findOne(query);
+            }
+
+            if (period) {
+                period.isPaid = true;
+                period.paymentStatus = 'paid';
+                period.paymentDate = new Date();
+                period.paymentAmount = payment.amount || 60000;
+                period.receipt = payment._id;
+                await period.save();
+                periodUpdated = period;
+            }
+        } else if (payment.paymentType === 'package') {
+            const quotaToAdd = payment.packageAccountsCount || 5;
+            if (payment.user) {
+                const user = await User.findById(payment.user._id || payment.user);
+                if (user) {
+                    user.packageQuota = (user.packageQuota || 0) + quotaToAdd;
+                    user.pricingPlan = 'package';
+                    await user.save();
+                }
+            }
+            if (payment.telegramChatId) {
+                const privilege = await TelegramPrivilege.findOne({ telegramChatId: payment.telegramChatId });
+                if (privilege) {
+                    privilege.packageQuota = (privilege.packageQuota || 0) + quotaToAdd;
+                    await privilege.save();
+                }
+            }
+        }
+
+        // Notify user via Telegram
+        if (payment.telegramChatId) {
+            try {
+                const { sendTelegramKeyboardMessage, sendTelegramMessage } = require('../services/telegram.service');
+                const contractorName = payment.contractorName || payment.user?.fullName || 'Contratista';
+                if (payment.paymentType === 'package') {
+                    let msg = `🎉 ¡PAGO DE PAQUETE APROBADO CON ÉXITO!\n\n`;
+                    msg += `Estimado(a) ${contractorName}, le confirmamos que su pago de $ ${Number(payment.amount || 100000).toLocaleString('es-CO')} COP por el Paquete de 5 Cuentas de Cobro ha sido verificado y aprobado por la Administración.\n\n`;
+                    msg += `📦 Cuentas asignadas a su cupo: 5 cuentas.\n`;
+                    msg += `Ya puede iniciar la creación de cuentas y cargue de evidencias sin restricciones.`;
+                    await sendTelegramMessage(payment.telegramChatId, msg);
+                } else {
+                    const actNum = payment.actNumber || 2;
+                    let msg = `🎉 ¡PAGO APROBADO CON ÉXITO!\n\n`;
+                    msg += `Estimado(a) ${contractorName}, le confirmamos que su pago de $ ${Number(payment.amount || 60000).toLocaleString('es-CO')} COP para su Acta N° ${actNum} ha sido verificado y aprobado por la Administración.\n\n`;
+                    msg += `✅ El sistema ha habilitado el cargue de evidencias e información para su cuenta de cobro.\n\n`;
+                    msg += `Presione el botón abajo para comenzar a cargar evidencias:`;
+                    await sendTelegramKeyboardMessage(payment.telegramChatId, msg, [
+                        [{ text: `📂 Subir Evidencias (Acta ${actNum})`, callback_data: `select_act_${actNum}` }],
+                        [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }]
+                    ]);
+                }
+            } catch (tgErr) {
+                console.error('Error al notificar al contratista por Telegram:', tgErr.message);
+            }
+        }
+
+        res.json({
+            message: `Pago de ${payment.contractorName || 'usuario'} por $ ${Number(payment.amount).toLocaleString('es-CO')} aprobado exitosamente`,
+            payment,
+            period: periodUpdated
+        });
+    } catch (error) {
+        console.error('Error al aprobar pago:', error);
+        res.status(500).json({ message: 'Error al aprobar pago', error: error.message });
+    }
+};
+
+// PATCH /api/admin/payments/:id/reject
+exports.rejectPaymentAdmin = async (req, res) => {
+    try {
+        const { reason } = req.body;
+        const payment = await PaymentReceipt.findById(req.params.id)
+            .populate('user')
+            .populate('contract');
+
+        if (!payment) {
+            return res.status(404).json({ message: 'Comprobante de pago no encontrado' });
+        }
+
+        payment.status = 'rejected';
+        payment.rejectionReason = reason || 'Comprobante no válido o valor no acreditado';
+        await payment.save();
+
+        // Notify user via Telegram
+        if (payment.telegramChatId) {
+            try {
+                const { sendTelegramKeyboardMessage } = require('../services/telegram.service');
+                const contractorName = payment.contractorName || payment.user?.fullName || 'Contratista';
+                let msg = `⚠️ NOVEDAD CON SU COMPROBANTE DE PAGO\n\n`;
+                msg += `Estimado(a) ${contractorName}, la administración ha revisado el comprobante de pago enviado y no fue posible validarlo.\n\n`;
+                if (reason) {
+                    msg += `Motivo: ${reason}\n\n`;
+                }
+                msg += `Por favor verifique la transferencia y envíe un nuevo comprobante legible con el valor correspondiente ($ ${Number(payment.amount).toLocaleString('es-CO')} COP), o comuníquese con el Administrador.`;
+                await sendTelegramKeyboardMessage(payment.telegramChatId, msg, [
+                    [{ text: '📷 Enviar Nuevo Comprobante', callback_data: payment.paymentType === 'package' ? 'pay_package' : `pay_act_${payment.actNumber || 2}` }]
+                ]);
+            } catch (tgErr) {
+                console.error('Error al notificar rechazo de pago por Telegram:', tgErr.message);
+            }
+        }
+
+        res.json({
+            message: 'Pago marcado como rechazado',
+            payment
+        });
+    } catch (error) {
+        console.error('Error al rechazar pago:', error);
+        res.status(500).json({ message: 'Error al rechazar pago', error: error.message });
+    }
+};
+
 

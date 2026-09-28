@@ -4,6 +4,8 @@ const User = require('../models/User');
 const Contract = require('../models/Contract');
 const BillingPeriod = require('../models/BillingPeriod');
 const TelegramPrivilege = require('../models/TelegramPrivilege');
+const PaymentConfig = require('../models/PaymentConfig');
+const PaymentReceipt = require('../models/PaymentReceipt');
 const geminiService = require('./gemini.service');
 const { generateBillingPackage } = require('../controllers/billing.controller');
 const { calculatePeriods, filterSpecificObligations, isGeneralObligation, getContractDurationText } = require('../utils/period.utils');
@@ -235,9 +237,121 @@ const sendTelegramDocument = async (chatId, filePath, caption) => {
 };
 
 /**
+ * Sends an image or document with Inline Keyboard to a chat
+ */
+const sendTelegramMediaWithKeyboard = async (chatId, filePath, caption, inlineKeyboard = null) => {
+    if (!TELEGRAM_TOKEN || !fs.existsSync(filePath)) return null;
+    try {
+        const filename = path.basename(filePath);
+        const fileBuffer = fs.readFileSync(filePath);
+        const ext = path.extname(filename).toLowerCase();
+        const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
+
+        const boundary = '----TelegramMediaBoundary' + Date.now().toString(16);
+        let mime = isImage ? (ext === '.png' ? 'image/png' : 'image/jpeg') : 'application/pdf';
+        const fieldName = isImage ? 'photo' : 'document';
+        const endpoint = isImage ? 'sendPhoto' : 'sendDocument';
+
+        const header = `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`;
+        const footer = `\r\n--${boundary}--\r\n`;
+        const multipartBody = Buffer.concat([Buffer.from(header, 'utf-8'), fileBuffer, Buffer.from(footer, 'utf-8')]);
+
+        let url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${endpoint}?chat_id=${chatId}&caption=${encodeURIComponent(caption)}`;
+        if (inlineKeyboard && inlineKeyboard.length > 0) {
+            url += `&reply_markup=${encodeURIComponent(JSON.stringify({ inline_keyboard: inlineKeyboard }))}`;
+        }
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': `multipart/form-data; boundary=${boundary}`
+            },
+            body: multipartBody
+        });
+
+        const data = await response.json();
+        if (!data.ok) {
+            console.error(`⚠️ Error al enviar media Telegram (${endpoint}):`, data.description);
+            return null;
+        }
+        return data.result;
+    } catch (err) {
+        console.error('❌ Error en sendTelegramMediaWithKeyboard:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Builds the protocolary payment message for individual contractors
+ */
+const buildContractorPaymentProtocolMessage = (contractorName, actNumber, config) => {
+    const rate = config?.contractorRate || 60000;
+    const rateFormatted = Number(rate).toLocaleString('es-CO');
+    const info = config?.paymentInstructions || {};
+    const banco = info.bankName && info.accountNumber ? `${info.bankName} N° ${info.accountNumber}` : 'Bancolombia Ahorros';
+    const nequi = info.nequiNumber || 'Por consultar';
+    const daviplata = info.daviplataNumber || 'Por consultar';
+    const titular = info.accountHolder || 'Administración Cuentas';
+
+    let msg = `🏛️ *SISTEMA DE RADICACIÓN Y GESTIÓN DE CUENTAS DE COBRO*\n\n`;
+    msg += `Estimado(a) contratista *${contractorName || 'Funcionario'}*,\n\n`;
+    msg += `Reciba un atento y cordial saludo institucional.\n\n`;
+    msg += `Le recordamos que la estructuración y generación de su primera cuenta de cobro (*Acta N° 1*) fue otorgada de manera *totalmente gratuita* como cortesía de bienvenida.\n\n`;
+    msg += `A partir de su *segunda cuenta de cobro (Acta N° ${actNumber || 2})* en adelante, el servicio de estructuración documental, informes con IA y generación de formatos oficiales opera bajo la tarifa regular:\n\n`;
+    msg += `💰 *TARIFA POR CUENTA DE COBRO:* *$ ${rateFormatted} COP*\n\n`;
+    msg += `📋 *Beneficios incluidos en su habilitación:*\n`;
+    msg += `  ✓ Diligenciamiento automatizado de los 4 formatos oficiales en Word (.docx)\n`;
+    msg += `  ✓ Extracción de obligaciones e informes de actividades con Inteligencia Artificial\n`;
+    msg += `  ✓ Procesamiento, validación y cruce de Planilla de Seguridad Social (PILA)\n`;
+    msg += `  ✓ Organización y rotulado automático de evidencias y anexos en archivo ZIP\n\n`;
+    msg += `💳 *Canales y Medios de Pago Habilitados:*\n`;
+    msg += `  • *Cuenta Bancaria:* ${banco}\n`;
+    msg += `  • *Nequi:* ${nequi}\n`;
+    msg += `  • *Daviplata:* ${daviplata}\n`;
+    msg += `  • *Titular:* ${titular}\n\n`;
+    msg += `📲 *Instrucciones para Habilitación:*\n`;
+    msg += `1. Realice la transferencia por *$ ${rateFormatted} COP*.\n`;
+    msg += `2. Envíe la captura o fotografía del comprobante de pago directamente a este chat.\n`;
+    msg += `3. Nuestro equipo administrativo verificará el soporte y de inmediato quedará habilitado el cargue de sus evidencias y comentarios.`;
+    return msg;
+};
+
+/**
+ * Builds the protocolary payment message for package users
+ */
+const buildPackagePaymentProtocolMessage = (userName, config) => {
+    const pkgRate = config?.packageRate || 100000;
+    const pkgRateFormatted = Number(pkgRate).toLocaleString('es-CO');
+    const unitRate = config?.packageUnitRate || 20000;
+    const unitRateFormatted = Number(unitRate).toLocaleString('es-CO');
+    const count = config?.packageAccountsCount || 5;
+    const info = config?.paymentInstructions || {};
+    const banco = info.bankName && info.accountNumber ? `${info.bankName} N° ${info.accountNumber}` : 'Bancolombia Ahorros';
+    const nequi = info.nequiNumber || 'Por consultar';
+    const daviplata = info.daviplataNumber || 'Por consultar';
+    const titular = info.accountHolder || 'Administración Cuentas';
+
+    let msg = `📦 *PLAN EMPRESARIAL / PAQUETE DE CUENTAS DE COBRO*\n\n`;
+    msg += `Estimado(a) *${userName || 'Usuario Gestor'}*,\n\n`;
+    msg += `Le damos la bienvenida a la modalidad de *Paquetes de Cuentas*. En este esquema, el servicio se adquiere de manera prepagada sin periodos gratuitos:\n\n`;
+    msg += `💰 *CONDICIONES DEL PAQUETE:*\n`;
+    msg += `  • *Cantidad de cuentas:* ${count} Cuentas de Cobro\n`;
+    msg += `  • *Tarifa preferencial:* $ ${unitRateFormatted} COP por cada cuenta\n`;
+    msg += `  • *Inversión total del paquete:* *$ ${pkgRateFormatted} COP*\n\n`;
+    msg += `⚠️ *Nota importante:* Para iniciar a ingresar datos, vincular funcionarios o generar cuentas, debe realizar la adquisición previa de su paquete.\n\n`;
+    msg += `💳 *Canales de Pago Habilitados:*\n`;
+    msg += `  • *Cuenta Bancaria:* ${banco}\n`;
+    msg += `  • *Nequi:* ${nequi}\n`;
+    msg += `  • *Daviplata:* ${daviplata}\n`;
+    msg += `  • *Titular:* ${titular}\n\n`;
+    msg += `📲 Por favor realice la transferencia de *$ ${pkgRateFormatted} COP* y envíe el comprobante a este chat para habilitar de inmediato su cupo de ${count} cuentas.`;
+    return msg;
+};
+
+/**
  * Verifies monetization and access rights for an Act/BillingPeriod.
  * - Act 1: 100% Free for everyone (Bienvenida / Free Trial).
- * - Act 2+: Requires payment, OR exemption, OR provider monthly quota.
+ * - Act 2+: Requires payment, OR exemption, OR package quota.
  */
 const checkPeriodAccess = async (chatId, activeUser, actNumber, period = null) => {
     // Act 1 is always FREE (Bienvenida / Primera cuenta sin costo)
@@ -248,6 +362,8 @@ const checkPeriodAccess = async (chatId, activeUser, actNumber, period = null) =
             badge: '1ª Cuenta (Gratis)'
         };
     }
+
+    const config = await PaymentConfig.getConfig();
 
     // Check if the chat is an active Telegram Operator Privilege
     const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
@@ -262,35 +378,48 @@ const checkPeriodAccess = async (chatId, activeUser, actNumber, period = null) =
             };
         }
 
-        // 2. Provider with Preferential Rate and Monthly Limit
-        if (privilege.operatorType === 'provider') {
-            const now = new Date();
-            const currentCycle = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        // 2. Provider with Preferential Rate and Package Quota
+        if (privilege.operatorType === 'provider' || (privilege.packageQuota && privilege.packageQuota > 0)) {
+            const totalQuota = (privilege.packageQuota || 0) + (privilege.monthlyAccountsLimit || 0);
+            const used = (privilege.packageAccountsUsed || 0) + (privilege.accountsUsedThisMonth || 0);
 
-            // Reset monthly usage if new calendar month
-            if (privilege.currentMonthCycle !== currentCycle) {
-                privilege.currentMonthCycle = currentCycle;
-                privilege.accountsUsedThisMonth = 0;
-                await privilege.save();
-            }
-
-            const limit = privilege.monthlyAccountsLimit || 15;
-            const used = privilege.accountsUsedThisMonth || 0;
-
-            if (used < limit) {
+            if (used < totalQuota) {
                 return {
                     allowed: true,
                     reason: 'provider',
-                    badge: `Proveedor (${used}/${limit} este mes)`,
+                    badge: `Paquete (${used}/${totalQuota} cuentas)`,
                     privilege
                 };
             } else {
                 return {
                     allowed: false,
-                    reason: 'provider_limit',
-                    message: `*Límite Mensual de Cuentas Completado*\n\nHas alcanzado tu cupo de *${limit} cuentas de cobro* disponibles para este mes (${currentCycle}).\n\nTarifa preferencial asignada: *$ ${Number(privilege.preferentialRate || 20000).toLocaleString('es-CO')}*\n\nPara ampliar tu cupo o renovar el paquete mensual, comunícate con el Administrador Maestro.`
+                    reason: 'package_required',
+                    message: buildPackagePaymentProtocolMessage(privilege.label, config),
+                    amount: config.packageRate || 100000,
+                    paymentType: 'package'
                 };
             }
+        }
+    }
+
+    // Check if user is in Package Plan
+    if (activeUser && activeUser.pricingPlan === 'package') {
+        const quota = activeUser.packageQuota || 0;
+        const used = activeUser.packageAccountsUsed || 0;
+        if (used < quota) {
+            return {
+                allowed: true,
+                reason: 'package_user',
+                badge: `Paquete (${used}/${quota})`
+            };
+        } else {
+            return {
+                allowed: false,
+                reason: 'package_required',
+                message: buildPackagePaymentProtocolMessage(activeUser.fullName, config),
+                amount: config.packageRate || 100000,
+                paymentType: 'package'
+            };
         }
     }
 
@@ -312,11 +441,14 @@ const checkPeriodAccess = async (chatId, activeUser, actNumber, period = null) =
         };
     }
 
-    // Otherwise, Act 2+ requires payment for regular contractors
+    // Otherwise, Act 2+ requires payment for regular contractors ($60.000 COP)
+    const contractorName = activeUser?.fullName || 'Contratista';
     return {
         allowed: false,
         reason: 'payment_required',
-        message: `*Habilitación de Cuenta N° ${actNumber} Requerida*\n\nCompletaste tu primera cuenta de cobro de cortesía.\n\nPara diligenciar las evidencias y generar tu *Acta N° ${actNumber}* (y subsiguientes), debes habilitar el periodo mediante el pago correspondiente.\n\n*Tarifa de habilitación:* $ 25.000 COP\n*Medios de pago disponibles:*\n• Bancolombia / A la Mano\n• Nequi / Daviplata\n\nPor favor envía tu comprobante de pago o comunícate con el Administrador para habilitar tu Acta N° ${actNumber}.`
+        message: buildContractorPaymentProtocolMessage(contractorName, actNumber, config),
+        amount: config.contractorRate || 60000,
+        paymentType: 'individual'
     };
 };
 
@@ -356,6 +488,17 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
             await sendTelegramMessage(chatId, `📦 ¡Paquete de Cobro generado con éxito para el Acta N° ${period.actNumber}! Enviando archivo ZIP...`);
             await sendTelegramDocument(chatId, zipPath, `Cuenta de Cobro - Acta ${period.actNumber}`);
 
+            // Mark zip as downloaded in database
+            period.zipDownloaded = true;
+            period.zipDownloadedAt = new Date();
+            await period.save();
+
+            // Check if date exceeds periodTo to evaluate payment status for next period
+            const activeContract = period.contract ? await Contract.findById(period.contract) : await resolveActiveContract(chatId, user);
+            if (activeContract) {
+                await checkAndAdvancePaymentStatus(user, activeContract);
+            }
+
             await sendTelegramKeyboardMessage(chatId, `✅ Paquete de Cobro entregado en formato ZIP.\n\nContiene los 4 formatos oficiales en Word (.docx) con sus anexos y fotos organizadas, listos para ser editados o modificados desde tu computador.`, [
                 [{ text: '📊 Volver al Resumen del Acta', callback_data: `summary_${period._id}` }],
                 [{ text: '📁 Ver Menú de Actas', callback_data: 'show_acts_menu' }]
@@ -366,6 +509,256 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
     } catch (err) {
         console.error('Error generando paquete desde Telegram:', err);
         await sendTelegramMessage(chatId, `❌ Error al generar los documentos: ${err.message}`);
+    }
+};
+
+/**
+ * Automatically evaluates whether a contract has completed a period and exceeded its periodTo date.
+ * If zip was downloaded and now > periodTo, the next period's payment flag is initialized as pending_payment.
+ */
+const checkAndAdvancePaymentStatus = async (user, contract) => {
+    try {
+        if (!contract || !contract.startDate || !user) return;
+
+        const periods = calculatePeriods(
+            contract.startDate,
+            contract.initialDurationMonths || 4,
+            contract.additionDurationMonths || 0,
+            contract.periodType || 'mes_cumplido',
+            contract.endDate
+        );
+
+        const existingPeriods = await BillingPeriod.find({
+            user: user._id,
+            contract: contract._id
+        }).sort({ actNumber: 1 });
+
+        const now = new Date();
+
+        for (const ep of existingPeriods) {
+            // Condition: uploaded evidence, downloaded zip, and current date exceeds periodTo
+            if (ep.zipDownloaded && ep.periodTo && now > new Date(ep.periodTo)) {
+                const nextActNumber = ep.actNumber + 1;
+                const nextPeriodConfig = periods.find(p => p.actNumber === nextActNumber);
+                if (nextPeriodConfig) {
+                    let nextPeriod = existingPeriods.find(p => p.actNumber === nextActNumber);
+                    if (!nextPeriod) {
+                        const specificObligations = filterSpecificObligations(contract.activities || []);
+                        const acts = specificObligations.map((text, i) => {
+                            const codeMatch = text.match(/^(\d+(\.\d+)*)\.?\s*(.*)$/);
+                            return {
+                                obligationCode: codeMatch ? codeMatch[1] : `2.2.${i + 1}`,
+                                obligationText: codeMatch ? codeMatch[3] : text,
+                                comment: '',
+                                evidences: []
+                            };
+                        });
+
+                        await BillingPeriod.create({
+                            user: user._id,
+                            contract: contract._id,
+                            actNumber: nextActNumber,
+                            periodFrom: new Date(nextPeriodConfig.from + 'T00:00:00'),
+                            periodTo: new Date(nextPeriodConfig.to + 'T23:59:59'),
+                            activities: acts,
+                            status: 'pending',
+                            isPaid: false,
+                            paymentStatus: 'pending_payment'
+                        });
+                    } else if (!nextPeriod.isPaid) {
+                        nextPeriod.paymentStatus = 'pending_payment';
+                        nextPeriod.isPaid = false;
+                        await nextPeriod.save();
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Error en checkAndAdvancePaymentStatus:', err);
+    }
+};
+
+/**
+ * Resolves the current target act for a contract based on download status and periodTo
+ */
+const getContractCurrentActiveAct = async (userId, contractId, contract) => {
+    try {
+        await checkAndAdvancePaymentStatus({ _id: userId }, contract);
+
+        const periods = calculatePeriods(
+            contract.startDate,
+            contract.initialDurationMonths || 4,
+            contract.additionDurationMonths || 0,
+            contract.periodType || 'mes_cumplido',
+            contract.endDate
+        );
+
+        const existingPeriods = await BillingPeriod.find({
+            user: userId,
+            contract: contractId
+        }).sort({ actNumber: 1 });
+
+        const downloadedPeriods = existingPeriods.filter(p => p.zipDownloaded);
+        let targetAct = 1;
+
+        if (downloadedPeriods.length > 0) {
+            const maxDownloaded = Math.max(...downloadedPeriods.map(p => p.actNumber));
+            const lastDownloaded = downloadedPeriods.find(p => p.actNumber === maxDownloaded);
+            const now = new Date();
+            const periodTo = lastDownloaded?.periodTo ? new Date(lastDownloaded.periodTo) : now;
+
+            if (now >= periodTo || lastDownloaded?.zipDownloaded) {
+                targetAct = maxDownloaded + 1;
+            } else {
+                targetAct = maxDownloaded;
+            }
+        }
+
+        const currentPeriod = existingPeriods.find(p => p.actNumber === targetAct) || null;
+        return { targetAct, currentPeriod, existingPeriods, periods };
+    } catch (err) {
+        console.error('Error en getContractCurrentActiveAct:', err);
+        return { targetAct: 1, currentPeriod: null, existingPeriods: [], periods: [] };
+    }
+};
+
+/**
+ * Handles incoming payment receipt (image or document) from user/contractor
+ */
+const handleIncomingPaymentReceipt = async (chatId, message, user, media) => {
+    try {
+        const session = sessions.get(chatId) || {};
+        const config = await PaymentConfig.getConfig();
+
+        const isPackage = session.paymentType === 'package' || session.awaitingPackagePayment === true || user?.pricingPlan === 'package';
+        const actNumber = session.awaitingPaymentForAct || 2;
+        const amount = isPackage ? (config.packageRate || 100000) : (config.contractorRate || 60000);
+
+        await sendTelegramMessage(chatId, '⏳ Recibiendo y procesando comprobante de pago...');
+        const downloaded = await downloadTelegramMedia(media.fileId, 'payment_receipt', media.originalName, media.mimeType);
+
+        const contract = await resolveActiveContract(chatId, user);
+        let period = null;
+        if (contract && !isPackage) {
+            const query = { user: user._id, contract: contract._id, actNumber: actNumber };
+            period = await BillingPeriod.findOne(query);
+            if (!period) {
+                const periods = calculatePeriods(
+                    contract.startDate,
+                    contract.initialDurationMonths || 4,
+                    contract.additionDurationMonths || 0,
+                    contract.periodType || 'mes_cumplido',
+                    contract.endDate
+                );
+                const pConfig = periods.find(p => p.actNumber === actNumber);
+                const specificObligations = filterSpecificObligations(contract.activities || []);
+                const acts = specificObligations.map((text, i) => {
+                    const codeMatch = text.match(/^(\d+(\.\d+)*)\.?\s*(.*)$/);
+                    return {
+                        obligationCode: codeMatch ? codeMatch[1] : `2.2.${i + 1}`,
+                        obligationText: codeMatch ? codeMatch[3] : text,
+                        comment: '',
+                        evidences: []
+                    };
+                });
+                period = await BillingPeriod.create({
+                    user: user._id,
+                    contract: contract._id,
+                    actNumber: actNumber,
+                    periodFrom: pConfig ? new Date(pConfig.from + 'T00:00:00') : new Date(),
+                    periodTo: pConfig ? new Date(pConfig.to + 'T23:59:59') : new Date(),
+                    activities: acts,
+                    status: 'pending',
+                    isPaid: false,
+                    paymentStatus: 'pending_payment'
+                });
+            }
+        }
+
+        const contractorName = contract?.contractorName || user?.fullName || [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || 'Contratista';
+        const contractorCedula = contract?.idNumber || session.cedula || '';
+        const telegramUser = message.from?.username ? `@${message.from.username}` : '';
+        const senderFullName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || contractorName;
+
+        const receipt = await PaymentReceipt.create({
+            user: user._id,
+            contract: contract?._id || null,
+            billingPeriod: period?._id || null,
+            telegramChatId: chatId,
+            telegramUsername: telegramUser,
+            telegramName: senderFullName,
+            contractorName: contractorName,
+            contractorCedula: contractorCedula,
+            paymentType: isPackage ? 'package' : 'individual',
+            actNumber: actNumber,
+            packageAccountsCount: 5,
+            amount: amount,
+            receiptFile: {
+                filename: downloaded.filename,
+                path: downloaded.relativePath,
+                mimetype: downloaded.mimetype
+            },
+            status: 'pending'
+        });
+
+        // Link receipt to period if applicable
+        if (period) {
+            period.receipt = receipt._id;
+            await period.save();
+        }
+
+        session.state = 'idle';
+        delete session.awaitingPaymentForAct;
+        delete session.awaitingPackagePayment;
+        delete session.paymentType;
+        sessions.set(chatId, session);
+
+        let confMsg = `📨 *COMPROBANTE DE PAGO REGISTRADO EXITOSAMENTE*\n\n`;
+        confMsg += `Estimado(a) *${contractorName}*, hemos registrado su soporte de pago por valor de *$ ${Number(amount).toLocaleString('es-CO')} COP* correspondiente a: *${isPackage ? 'Paquete de 5 Cuentas de Cobro' : `Acta N° ${actNumber}`}*.\n\n`;
+        confMsg += `🏛️ El comprobante ha sido enviado a la Administración para su validación inmediata.\n`;
+        confMsg += `Una vez aprobado, el sistema le enviará una confirmación automática y habilitará el cargue de sus evidencias e información.`;
+        await sendTelegramMessage(chatId, confMsg);
+
+        // Forward to admin
+        const approvalChatId = config.approvalTelegramChatId;
+        if (approvalChatId) {
+            const adminCaption = `🔔 *NUEVO COMPROBANTE DE PAGO RECIBIDO*\n\n` +
+                `👤 *Funcionario:* ${contractorName}\n` +
+                `🪪 *Cédula:* ${contractorCedula || 'No registrada'}\n` +
+                `📱 *Telegram ID:* \`${chatId}\` (${telegramUser || senderFullName})\n` +
+                `📋 *Concepto:* ${isPackage ? '📦 Paquete de 5 Cuentas de Cobro' : `📄 Cuenta Individual - Acta N° ${actNumber}`}\n` +
+                `💰 *Valor a Pagar:* $ ${Number(amount).toLocaleString('es-CO')} COP\n` +
+                `🏛️ *Entidad:* ${contract?.entityName || 'Alcaldía de Armenia'}\n` +
+                `🕒 *Fecha:* ${new Date().toLocaleString('es-CO')}\n\n` +
+                `👉 *Verifique la imagen y seleccione una acción:*`;
+
+            const adminKeyboard = [
+                [
+                    { text: `✅ Aprobar Pago ($${Number(amount).toLocaleString('es-CO')})`, callback_data: `approve_pay_${receipt._id}` },
+                    { text: '❌ Rechazar Pago', callback_data: `reject_pay_${receipt._id}` }
+                ]
+            ];
+
+            const sent = await sendTelegramMediaWithKeyboard(
+                approvalChatId,
+                downloaded.absolutePath,
+                adminCaption,
+                adminKeyboard
+            );
+
+            if (sent && sent.message_id) {
+                receipt.adminTelegramChatId = approvalChatId;
+                receipt.adminTelegramMessageId = sent.message_id;
+                await receipt.save();
+            }
+        } else {
+            console.log('ℹ️ [TelegramBot] No hay approvalTelegramChatId configurado en PaymentConfig. El comprobante está en la BD para aprobación desde el panel web.');
+        }
+
+        return receipt;
+    } catch (err) {
+        console.error('❌ Error en handleIncomingPaymentReceipt:', err);
+        await sendTelegramMessage(chatId, `❌ Error al registrar el comprobante: ${err.message}`);
     }
 };
 
@@ -882,10 +1275,23 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         if (!access.allowed) {
             const banner = getContractBanner(contract, chatId);
             const text = `${banner}\n${access.message}`;
+
+            const session = sessions.get(chatId) || {};
+            session.state = 'awaiting_payment_receipt';
+            session.awaitingPaymentForAct = actNumber;
+            session.paymentType = access.paymentType || 'individual';
+            sessions.set(chatId, session);
+
             const keyboard = [
-                [{ text: '📁 Volver a las Actas', callback_data: 'show_acts_menu' }],
-                [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
+                [{ text: `📷 Adjuntar Comprobante ($${Number(access.amount || 60000).toLocaleString('es-CO')})`, callback_data: access.paymentType === 'package' ? 'pay_package' : `pay_act_${actNumber}` }],
+                [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }]
             ];
+            if (access.paymentType !== 'package') {
+                keyboard.push([{ text: '📦 Comprar Paquete (5 Cuentas x $100.000)', callback_data: 'buy_package' }]);
+            }
+            keyboard.push([{ text: '📁 Volver a las Actas', callback_data: 'show_acts_menu' }]);
+            keyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+
             if (sessions.get(chatId)?.isOperator) {
                 keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
             }
@@ -1382,6 +1788,212 @@ const handleCallbackQuery = async (callbackQuery) => {
         });
     } catch (_) {}
 
+    // ── Payment & Approval Callbacks ─────────────────────────────
+    if (data.startsWith('approve_pay_')) {
+        const paymentId = data.replace('approve_pay_', '');
+        const payment = await PaymentReceipt.findById(paymentId).populate('user').populate('contract');
+        if (!payment) {
+            await sendTelegramMessage(chatId, '❌ Comprobante de pago no encontrado.');
+            return;
+        }
+
+        if (payment.status === 'approved') {
+            await sendTelegramMessage(chatId, 'ℹ️ Este comprobante de pago ya fue aprobado previamente.');
+            return;
+        }
+
+        payment.status = 'approved';
+        payment.approvedAt = new Date();
+        payment.approvedBy = `Admin Telegram (${chatId})`;
+        payment.rejectionReason = '';
+        await payment.save();
+
+        if (payment.paymentType === 'individual') {
+            const query = { user: payment.user._id, actNumber: payment.actNumber };
+            if (payment.contract) query.contract = payment.contract._id;
+            let targetPeriod = await BillingPeriod.findOne(query);
+
+            if (!targetPeriod && payment.contract) {
+                targetPeriod = await BillingPeriod.create({
+                    user: payment.user._id,
+                    contract: payment.contract._id,
+                    actNumber: payment.actNumber,
+                    periodFrom: new Date(),
+                    periodTo: new Date(),
+                    status: 'pending',
+                    isPaid: true,
+                    paymentStatus: 'paid',
+                    paymentDate: new Date(),
+                    paymentAmount: payment.amount || 60000,
+                    receipt: payment._id
+                });
+            } else if (targetPeriod) {
+                targetPeriod.isPaid = true;
+                targetPeriod.paymentStatus = 'paid';
+                targetPeriod.paymentDate = new Date();
+                targetPeriod.paymentAmount = payment.amount || 60000;
+                targetPeriod.receipt = payment._id;
+                await targetPeriod.save();
+            }
+        } else if (payment.paymentType === 'package') {
+            const quota = payment.packageAccountsCount || 5;
+            if (payment.user) {
+                const u = await User.findById(payment.user._id || payment.user);
+                if (u) {
+                    u.packageQuota = (u.packageQuota || 0) + quota;
+                    u.pricingPlan = 'package';
+                    await u.save();
+                }
+            }
+            if (payment.telegramChatId) {
+                const priv = await TelegramPrivilege.findOne({ telegramChatId: payment.telegramChatId });
+                if (priv) {
+                    priv.packageQuota = (priv.packageQuota || 0) + quota;
+                    await priv.save();
+                }
+            }
+        }
+
+        // Edit Admin message with approval feedback
+        const approvedSummary = `✅ *PAGO APROBADO EXITOSAMENTE*\n\n` +
+            `👤 *Funcionario:* ${payment.contractorName}\n` +
+            `🪪 *Cédula:* ${payment.contractorCedula || 'N/A'}\n` +
+            `💰 *Valor:* $ ${Number(payment.amount).toLocaleString('es-CO')} COP\n` +
+            `📋 *Concepto:* ${payment.paymentType === 'package' ? '📦 Paquete 5 Cuentas' : `📄 Acta N° ${payment.actNumber}`}\n` +
+            `🕒 *Aprobado:* ${new Date().toLocaleString('es-CO')}\n` +
+            `👮 *Aprobador:* Admin (${chatId})`;
+        await editTelegramMessage(chatId, messageId, approvedSummary, []);
+
+        // Notify Contractor on Telegram!
+        if (payment.telegramChatId) {
+            try {
+                if (payment.paymentType === 'package') {
+                    let msg = `🎉 *¡PAGO DE PAQUETE APROBADO CON ÉXITO!*\n\n`;
+                    msg += `Estimado(a) *${payment.contractorName}*, le confirmamos que su pago de *$ ${Number(payment.amount).toLocaleString('es-CO')} COP* por el *Paquete de 5 Cuentas* ha sido verificado y aprobado por la Administración.\n\n`;
+                    msg += `📦 Cuentas asignadas a su cupo: *5 cuentas*.\n`;
+                    msg += `Ya puede iniciar la creación de cuentas y cargue de evidencias sin restricciones.`;
+                    await sendTelegramMessage(payment.telegramChatId, msg);
+                } else {
+                    let msg = `🎉 *¡PAGO APROBADO CON ÉXITO!*\n\n`;
+                    msg += `Estimado(a) *${payment.contractorName}*, le confirmamos que su pago de *$ ${Number(payment.amount).toLocaleString('es-CO')} COP* para su *Acta N° ${payment.actNumber}* ha sido verificado y aprobado por la Administración.\n\n`;
+                    msg += `✅ El sistema ha quedado habilitado para que pueda cargar sus evidencias y comentarios.\n\n`;
+                    msg += `Presione el botón abajo para comenzar:`;
+                    await sendTelegramKeyboardMessage(payment.telegramChatId, msg, [
+                        [{ text: `📂 Subir Evidencias (Acta ${payment.actNumber})`, callback_data: `select_act_${payment.actNumber}` }],
+                        [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }]
+                    ]);
+                }
+            } catch (notifyErr) {
+                console.error('Error al notificar al contratista:', notifyErr.message);
+            }
+        }
+        return;
+    } else if (data.startsWith('reject_pay_')) {
+        const paymentId = data.replace('reject_pay_', '');
+        const payment = await PaymentReceipt.findById(paymentId);
+        if (!payment) {
+            await sendTelegramMessage(chatId, '❌ Comprobante no encontrado.');
+            return;
+        }
+
+        payment.status = 'rejected';
+        payment.rejectionReason = 'Rechazado por el Administrador';
+        await payment.save();
+
+        const rejectedSummary = `❌ *PAGO RECHAZADO*\n\n` +
+            `👤 *Funcionario:* ${payment.contractorName}\n` +
+            `🪪 *Cédula:* ${payment.contractorCedula || 'N/A'}\n` +
+            `💰 *Valor:* $ ${Number(payment.amount).toLocaleString('es-CO')} COP\n` +
+            `🕒 *Rechazado el:* ${new Date().toLocaleString('es-CO')}\n` +
+            `👮 *Admin:* ${chatId}`;
+        await editTelegramMessage(chatId, messageId, rejectedSummary, []);
+
+        if (payment.telegramChatId) {
+            try {
+                let msg = `⚠️ *NOVEDAD CON SU COMPROBANTE DE PAGO*\n\n`;
+                msg += `Estimado(a) *${payment.contractorName}*, la administración ha revisado el soporte de pago enviado y no fue posible validarlo.\n\n`;
+                msg += `Por favor verifique la transferencia y envíe un nuevo comprobante legible con el valor correspondiente ($ ${Number(payment.amount).toLocaleString('es-CO')} COP), o comuníquese con el Administrador.`;
+                await sendTelegramKeyboardMessage(payment.telegramChatId, msg, [
+                    [{ text: '📷 Enviar Nuevo Comprobante', callback_data: payment.paymentType === 'package' ? 'pay_package' : `pay_act_${payment.actNumber || 2}` }]
+                ]);
+            } catch (notifyErr) {
+                console.error('Error al notificar rechazo:', notifyErr.message);
+            }
+        }
+        return;
+    } else if (data.startsWith('pay_act_')) {
+        const actNum = parseInt(data.replace('pay_act_', ''), 10) || 2;
+        const session = sessions.get(chatId) || {};
+        session.state = 'awaiting_payment_receipt';
+        session.awaitingPaymentForAct = actNum;
+        session.paymentType = 'individual';
+        sessions.set(chatId, session);
+
+        const config = await PaymentConfig.getConfig();
+        const rate = config.contractorRate || 60000;
+
+        let msg = `📸 *CARGA DE COMPROBANTE DE PAGO (ACTA N° ${actNum})*\n\n`;
+        msg += `Tarifa a cancelar: *$ ${Number(rate).toLocaleString('es-CO')} COP*\n\n`;
+        msg += `Por favor, adjunta en este momento la fotografía, captura de pantalla o archivo PDF de tu comprobante de transferencia.\n\n`;
+        msg += `💡 O presiona el botón abajo para consultar los medios de pago:`;
+
+        await sendTelegramKeyboardMessage(chatId, msg, [
+            [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }],
+            [{ text: '❌ Cancelar', callback_data: 'show_acts_menu' }]
+        ]);
+        return;
+    } else if (data === 'pay_package' || data === 'buy_package') {
+        const session = sessions.get(chatId) || {};
+        session.state = 'awaiting_payment_receipt';
+        session.paymentType = 'package';
+        session.awaitingPackagePayment = true;
+        sessions.set(chatId, session);
+
+        const config = await PaymentConfig.getConfig();
+        const pkgRate = config.packageRate || 100000;
+        const count = config.packageAccountsCount || 5;
+
+        let msg = `📦 *CARGA DE COMPROBANTE - PAQUETE DE ${count} CUENTAS*\n\n`;
+        msg += `Tarifa del paquete: *$ ${Number(pkgRate).toLocaleString('es-CO')} COP*\n`;
+        msg += `Tarifa unitaria: $ 20.000 COP por cuenta.\n\n`;
+        msg += `Por favor, adjunta la fotografía, captura de pantalla o PDF de tu comprobante de pago por *$ ${Number(pkgRate).toLocaleString('es-CO')} COP*.\n\n`;
+        msg += `Una vez validado, se acreditarán ${count} cuentas a tu saldo de inmediato.`;
+
+        await sendTelegramKeyboardMessage(chatId, msg, [
+            [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }],
+            [{ text: '❌ Cancelar', callback_data: 'show_acts_menu' }]
+        ]);
+        return;
+    } else if (data === 'view_payment_methods') {
+        const config = await PaymentConfig.getConfig();
+        const info = config.paymentInstructions || {};
+        const banco = info.bankName && info.accountNumber ? `${info.bankName} N° ${info.accountNumber}` : 'Bancolombia Ahorros';
+        const nequi = info.nequiNumber || 'Por consultar';
+        const daviplata = info.daviplataNumber || 'Por consultar';
+        const titular = info.accountHolder || 'Administración Cuentas';
+
+        let msg = `💳 *MEDIOS DE PAGO OFICIALES*\n\n`;
+        msg += `• *Cuenta Bancaria:* ${banco}\n`;
+        msg += `• *Nequi:* ${nequi}\n`;
+        msg += `• *Daviplata:* ${daviplata}\n`;
+        msg += `• *Titular:* ${titular}\n`;
+        if (info.identification) msg += `• *Documento / NIT:* ${info.identification}\n`;
+        msg += `\n*Tarifas Vigentes:*\n`;
+        msg += `• Cuenta individual (Acta 2+): *$ ${Number(config.contractorRate || 60000).toLocaleString('es-CO')} COP*\n`;
+        msg += `• Paquete de 5 cuentas: *$ ${Number(config.packageRate || 100000).toLocaleString('es-CO')} COP* ($ 20.000 c/u)\n\n`;
+        msg += `Una vez realizada la transferencia, adjunta la imagen del comprobante en este chat:`;
+
+        const session = sessions.get(chatId);
+        const actNum = session?.awaitingPaymentForAct || 2;
+
+        await sendTelegramKeyboardMessage(chatId, msg, [
+            [{ text: '📷 Adjuntar Comprobante de Cuenta Individual', callback_data: `pay_act_${actNum}` }],
+            [{ text: '📦 Adjuntar Comprobante de Paquete (5 Cuentas)', callback_data: 'pay_package' }],
+            [{ text: '⬅️ Volver', callback_data: 'show_acts_menu' }]
+        ]);
+        return;
+    }
+
     // Public / Registration callbacks (no existing user required)
     if (data === 'start_registration') {
         const session = sessions.get(chatId);
@@ -1515,6 +2127,39 @@ const handleCallbackQuery = async (callbackQuery) => {
         msg += `📅 Vigencia: ${contract.startDate ? contract.startDate.split('T')[0] : 'N/A'} al ${contract.endDate ? contract.endDate.split('T')[0] : 'N/A'}\n`;
         msg += `⏱️ Plazo: ${getContractDurationText(contract)}\n`;
         msg += `📝 Obligaciones: ${contract.activities ? contract.activities.length : 0} registradas\n\n`;
+
+        // Check if current target act requires payment
+        const { targetAct, currentPeriod } = await getContractCurrentActiveAct(user._id, contract._id, contract);
+        const access = await checkPeriodAccess(chatId, user, targetAct, currentPeriod);
+
+        if (!access.allowed) {
+            session.state = 'awaiting_payment_receipt';
+            session.awaitingPaymentForAct = targetAct;
+            session.paymentType = access.paymentType || 'individual';
+            sessions.set(chatId, session);
+
+            const paymentKeyboard = [
+                [{ text: `📷 Adjuntar Comprobante ($${Number(access.amount || 60000).toLocaleString('es-CO')})`, callback_data: access.paymentType === 'package' ? 'pay_package' : `pay_act_${targetAct}` }],
+                [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }]
+            ];
+            if (access.paymentType !== 'package') {
+                paymentKeyboard.push([{ text: '📦 Comprar Paquete (5 Cuentas x $100.000)', callback_data: 'buy_package' }]);
+            }
+            paymentKeyboard.push([{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }]);
+            if (sessions.get(chatId)?.isOperator) {
+                paymentKeyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+            } else {
+                paymentKeyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+            }
+
+            if (messageId) {
+                await editTelegramMessage(chatId, messageId, `${msg}\n${access.message}`, paymentKeyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, `${msg}\n${access.message}`, paymentKeyboard);
+            }
+            return;
+        }
+
         msg += `¿Qué deseas gestionar para este contrato?`;
 
         const keyboard = [
@@ -1782,6 +2427,21 @@ const handleIncomingMessage = async (message) => {
 
     // 2. Active interactive states (highest priority: prevent greeting/trigger collision)
     if (session) {
+        // Awaiting Payment Receipt
+        if (session.state === 'awaiting_payment_receipt') {
+            const media = extractTelegramFile(message);
+            if (!media) {
+                await sendTelegramKeyboardMessage(chatId, '📷 Por favor adjunta la fotografía, captura de pantalla o archivo PDF del comprobante de pago, o presiona Cancelar:', [
+                    [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }],
+                    [{ text: '❌ Cancelar', callback_data: 'show_acts_menu' }]
+                ]);
+                return;
+            }
+            const activeUser = await resolveActiveUser(chatId);
+            await handleIncomingPaymentReceipt(chatId, message, activeUser, media);
+            return;
+        }
+
         // Awaiting link cédula (legacy web code association)
         if (session.state === 'awaiting_link_cedula') {
             const inputCedula = text.replace(/\D/g, '');
@@ -3084,6 +3744,33 @@ const handleIncomingMessage = async (message) => {
                         [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
                     ]);
                 } else {
+                    const { targetAct, currentPeriod } = await getContractCurrentActiveAct(user._id, contract._id, contract);
+                    const access = await checkPeriodAccess(chatId, user, targetAct, currentPeriod);
+
+                    if (!access.allowed) {
+                        sessions.set(chatId, {
+                            state: 'awaiting_payment_receipt',
+                            cedula: numericOnly,
+                            activeContractId: contract._id,
+                            contractId: contract._id,
+                            userId: user ? user._id : null,
+                            awaitingPaymentForAct: targetAct,
+                            paymentType: access.paymentType || 'individual'
+                        });
+
+                        const paymentButtons = [
+                            [{ text: `📷 Adjuntar Comprobante ($${Number(access.amount || 60000).toLocaleString('es-CO')})`, callback_data: access.paymentType === 'package' ? 'pay_package' : `pay_act_${targetAct}` }],
+                            [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }]
+                        ];
+                        if (access.paymentType !== 'package') {
+                            paymentButtons.push([{ text: '📦 Comprar Paquete (5 Cuentas x $100.000)', callback_data: 'buy_package' }]);
+                        }
+                        paymentButtons.push([{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }]);
+
+                        await sendTelegramKeyboardMessage(chatId, `${reply}${access.message}`, paymentButtons);
+                        return;
+                    }
+
                     reply += `¿Qué deseas realizar hoy?`;
 
                     await sendTelegramKeyboardMessage(chatId, reply, [
@@ -3371,6 +4058,47 @@ const handleIncomingMessage = async (message) => {
                 }
             }
 
+            // Check if media is a payment receipt or user has an act pending payment
+            if (media) {
+                const isPaymentKeyword = caption.includes('pago') || caption.includes('comprobante') || caption.includes('recibo') ||
+                                         caption.includes('transferencia') || caption.includes('consigna') || caption.includes('soporte') ||
+                                         caption.includes('nequi') || caption.includes('daviplata') || caption.includes('bancolombia') ||
+                                         fileName.includes('pago') || fileName.includes('comprobante') || fileName.includes('recibo') ||
+                                         fileName.includes('transferencia') || fileName.includes('consigna') || fileName.includes('soporte');
+
+                const contract = await resolveActiveContract(chatId, user);
+                let actRequiresPayment = false;
+                let currentAct = 2;
+                if (contract) {
+                    const { targetAct, currentPeriod } = await getContractCurrentActiveAct(user._id, contract._id, contract);
+                    currentAct = targetAct;
+                    const access = await checkPeriodAccess(chatId, user, targetAct, currentPeriod);
+                    if (!access.allowed) {
+                        actRequiresPayment = true;
+                    }
+                } else if (user?.pricingPlan === 'package') {
+                    actRequiresPayment = true;
+                }
+
+                if (isPaymentKeyword || actRequiresPayment) {
+                    if (!sessions.has(chatId)) {
+                        sessions.set(chatId, {
+                            state: 'awaiting_payment_receipt',
+                            awaitingPaymentForAct: currentAct,
+                            userId: user._id,
+                            contractId: contract?._id,
+                            paymentType: user?.pricingPlan === 'package' ? 'package' : 'individual'
+                        });
+                    } else {
+                        const sess = sessions.get(chatId);
+                        sess.awaitingPaymentForAct = sess.awaitingPaymentForAct || currentAct;
+                    }
+                    await handleIncomingPaymentReceipt(chatId, message, user, media);
+                    return;
+                }
+            }
+
+
             const buttons = [
                 [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
                 [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
@@ -3454,7 +4182,10 @@ const startTelegramPolling = async () => {
 module.exports = {
     startTelegramPolling,
     sendTelegramMessage,
+    sendTelegramKeyboardMessage,
     sendTelegramDocument,
     handleIncomingMessage,
-    handleCallbackQuery
+    handleCallbackQuery,
+    checkAndAdvancePaymentStatus,
+    getContractCurrentActiveAct
 };
