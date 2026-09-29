@@ -702,3 +702,76 @@ REGLAS ESTRICTAS DE REDACCIÓN:
     }
 };
 
+/**
+ * Generates the formal overview text for the section "Evidencias de la ejecución del contrato"
+ * in the official Informe de Actividades, synthesizing the evidence types, technical reports,
+ * and pointing the supervisor to the "Anexo Descripción" documents and folder structure.
+ */
+exports.generateExecutionEvidencesSummary = async ({
+    contractObject = '',
+    contractType = '',
+    activities = []
+}) => {
+    // Collect context about the activities and evidence types
+    const actsSummary = (activities || []).map((act, i) => {
+        const code = act.obligationCode || `2.2.${i + 1}`;
+        const text = act.obligationText || '';
+        const evTypes = (act.evidences || []).map(e => e.filename || 'soporte').join(', ');
+        return `- Obligación ${code} (${text.substring(0, 80)}): ${evTypes ? 'Archivos: ' + evTypes : 'Sin archivos específicos'}`;
+    }).join('\n');
+
+    // Default fallback adhering strictly to the user's template
+    const defaultFallback = `Durante el período reportado, se han recopilado diversas evidencias que respaldan la ejecución satisfactoria del contrato. Estas evidencias incluyen:
+
+• Archivos en formato Word y PDF con informes detallados ("Anexo Descripción") sobre las actividades realizadas, incluyendo material fotográfico y descripciones específicas de cada acción llevada a cabo.
+
+• Archivos en formato PDF y hojas de cálculo de reportes técnicos y de mantenimiento preventivo y correctivo.
+
+• Listados de asistencia, planillas y soportes de control según las obligaciones contractuales.
+
+Los anexos oficiales correspondientes y la totalidad de los soportes se encuentran debidamente clasificados y adjuntos en la carpeta correspondiente a cada obligación en el paquete de cobro entregado a la supervisión.`;
+
+    try {
+        const prompt = `
+Eres un redactor experto de informes de actividades y cuentas de cobro para contratos estatales en Colombia.
+Tu tarea es redactar el texto formal para la sección "Evidencias de la ejecución del contrato" del Informe de Actividades oficial.
+
+CONTEXTO DEL CONTRATO:
+- Objeto del contrato: ${contractObject || 'Prestación de servicios profesionales o de apoyo a la gestión'}
+- Tipo de contrato: ${contractType || 'Prestación de servicios'}
+- Obligaciones y soportes reportados en el periodo:
+${actsSummary || 'Ejecución integral de obligaciones técnicas'}
+
+ESTRUCTURA OBLIGATORIA A GENERAR:
+1. Párrafo introductorio formal:
+"Durante el período reportado, se han recopilado diversas evidencias que respaldan la ejecución satisfactoria del contrato. Estas evidencias incluyen:"
+
+2. Entre 3 y 4 viñetas (iniciadas estrictamente con el símbolo "•") que detallen los tipos de evidencias técnicas y documentales generadas en el periodo, adaptadas al objeto del contrato y a las labores reportadas (por ejemplo: documentos oficiales Anexo Descripción con informes detallados y registro fotográfico, reportes técnicos de mantenimiento preventivo y correctivo, archivos y hojas de cálculo en Excel/PDF, listados de asistencia, actas o planillas de control si corresponden).
+
+3. Párrafo final de cierre formal:
+"Los anexos oficiales correspondientes ("Anexo Descripción") y la totalidad de los soportes digitales se encuentran debidamente clasificados y adjuntos en la carpeta correspondiente a cada obligación en el paquete de cobro entregado a la supervisión."
+
+REGLAS ESTRICTAS:
+- Tono institucional, técnico, impecable y formal para la administración pública colombiana.
+- Entrega ÚNICAMENTE el texto final en texto plano, sin markdown de negritas con asteriscos (**), sin títulos extras ni encabezados, listo para insertar en el documento Word.
+- Deja una línea en blanco entre párrafos y entre viñetas para una lectura limpia.
+`;
+
+        const result = await generateAIContent(prompt);
+        const response = await result.response;
+        let generatedText = response.text().trim().replace(/^["']|["']$/g, '');
+
+        // Remove any markdown bolding like **
+        generatedText = generatedText.replace(/\*\*/g, '');
+
+        if (generatedText && generatedText.length > 80) {
+            return generatedText;
+        }
+        return defaultFallback;
+    } catch (error) {
+        console.warn("Aviso: No se pudo generar el resumen de evidencias con IA, usando plantilla formal:", error.message);
+        return defaultFallback;
+    }
+};
+
+

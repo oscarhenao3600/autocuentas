@@ -5,7 +5,7 @@ const Contract        = require('../models/Contract');
 const User            = require('../models/User');
 const { generateDocument } = require('../services/document.service');
 const { createBillingZip } = require('../services/archive.service');
-const { extractSecuritySocialData, improveEvidenceText, generateObligationAnnexDescription } = require('../services/gemini.service');
+const { extractSecuritySocialData, improveEvidenceText, generateObligationAnnexDescription, generateExecutionEvidencesSummary } = require('../services/gemini.service');
 const annexService = require('../services/annex.service');
 const storageService = require('../services/storage.service');
 
@@ -68,28 +68,37 @@ function monthYearEs(dateInput) {
 function formatActivitiesText(acts) {
     if (!acts || acts.length === 0) return 'No se registraron actividades en el periodo.';
     return acts.map((act, i) => {
-        const code = act.obligationCode || `2.2.${i + 1}`;
-        const text = act.obligationText || '';
+        const rawCode = (act.obligationCode || `2.2.${i + 1}`).trim();
+        const cleanCode = rawCode.replace(/\.+$/, '');
+        const lastNumMatch = cleanCode.match(/\d+$/);
+        const actNum = lastNumMatch ? lastNumMatch[0] : (i + 1).toString();
+
+        let cleanOblText = (act.obligationText || '').trim();
+        cleanOblText = cleanOblText.replace(/^obligaci[oó]n\s*[\d.]*:?\s*/i, '').trim();
+        const codePattern = cleanCode.replace(/\./g, '\\.');
+        cleanOblText = cleanOblText.replace(new RegExp(`^${codePattern}\\.?\\s*`, 'i'), '').trim();
+        cleanOblText = cleanOblText.replace(/^[\d.]+\.?\s*/, '').trim();
+
+        const encabezado = `${cleanCode}. ${cleanOblText}`;
+
         let comment = (act.comment && act.comment.trim().length > 0)
             ? act.comment.trim()
             : 'Actividades ejecutadas a satisfacción durante el periodo reportado.';
 
-        const docs = (act.evidences || []).filter(ev => !isImageEvidence(ev));
-        const photos = (act.evidences || []).filter(isImageEvidence);
+        // Quitar numeración previa si el contratista ya la escribió (ej: "5 " o "5. ")
+        comment = comment.replace(new RegExp(`^${actNum}[.\\s-]+\\s*`, 'i'), '').trim();
+        comment = comment.replace(/^\d+[.\s-]+\s*/, '').trim();
 
-        if (docs.length > 0) {
-            const docNames = docs.map(d => d.filename || path.basename(d.path || 'Documento')).join(', ');
-            if (!comment.toLowerCase().includes('.pdf') && !comment.toLowerCase().includes('.xlsx') && !comment.toLowerCase().includes(docNames.toLowerCase())) {
-                comment += ` (Documento(s) soporte anexo(s): ${docNames}).`;
+        // Validar si ya contiene la referencia a la carpeta y anexo
+        const hasAnnexRef = /carpeta\s*[\d.]*\s*anexo\s*[\d.]*/i.test(comment);
+        if (!hasAnnexRef) {
+            if (!comment.endsWith('.')) {
+                comment += '.';
             }
+            comment += ` carpeta${cleanCode} Anexo ${actNum}.1.`;
         }
 
-        // Referencia directa al Anexo Descripción para el supervisor
-        if ((photos.length > 0 || docs.length > 0) && !comment.toLowerCase().includes('anexo descripcion')) {
-            comment += ` (Para mayor detalle y registro de evidencias, ver documento "Anexo Descripcion ${code}.docx" en la subcarpeta "${code}/" del paquete digital).`;
-        }
-
-        return `Obligación ${code}: ${text}\nActividad desarrollada: ${comment}`;
+        return `${encabezado}\n${actNum} ${comment}`;
     }).join('\n\n');
 }
 
@@ -419,6 +428,18 @@ const generateBillingPackage = async (periodId, userId) => {
         const actaParcialDia = periodToDateObj ? String(periodToDateObj.getDate()).padStart(2, '0') : '';
         const actaParcialMesNum = periodToDateObj ? String(periodToDateObj.getMonth() + 1).padStart(2, '0') : '';
 
+        // Generar texto formal de resumen de evidencias para el Informe de Actividades con IA
+        let evidenciasEjecucionTexto;
+        try {
+            evidenciasEjecucionTexto = await generateExecutionEvidencesSummary({
+                contractObject: contract.contractObject,
+                contractType: contract.contractType,
+                activities: period.activities
+            });
+        } catch (_) {
+            evidenciasEjecucionTexto = formatEvidencesText(period.activities);
+        }
+
         const commonData = {
             // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
             fecha_certificado:                 formatDateNumeric(period.periodTo),
@@ -474,7 +495,7 @@ const generateBillingPackage = async (periodId, userId) => {
             periodo_informado_inicio:          formatDateNumeric(period.periodFrom),
             periodo_informado_fin:             formatDateNumeric(period.periodTo),
             actividades_desarrolladas:         formatActivitiesText(period.activities),
-            evidencias_ejecucion:              formatEvidencesText(period.activities),
+            evidencias_ejecucion:              evidenciasEjecucionTexto || formatEvidencesText(period.activities),
             anticipo:                          "0",
             valor_acta_1:                      period.actNumber >= 1 ? monthlyValFormatted : "0",
             valor_acta_2:                      period.actNumber >= 2 ? monthlyValFormatted : "0",
@@ -602,11 +623,26 @@ const generateBillingPackage = async (periodId, userId) => {
 
         for (let i = 0; i < (period.activities || []).length; i++) {
             const act = period.activities[i];
-            const code = act.obligationCode || `2.2.${i + 1}`;
-            const text = act.obligationText || '';
+            const rawCode = (act.obligationCode || `2.2.${i + 1}`).trim();
+            const cleanCode = rawCode.replace(/\.+$/, '');
+            const lastNumMatch = cleanCode.match(/\d+$/);
+            const actNum = lastNumMatch ? lastNumMatch[0] : (i + 1).toString();
+
+            let cleanOblText = (act.obligationText || '').trim();
+            cleanOblText = cleanOblText.replace(/^obligaci[oó]n\s*[\d.]*:?\s*/i, '').trim();
+            const codePattern = cleanCode.replace(/\./g, '\\.');
+            cleanOblText = cleanOblText.replace(new RegExp(`^${codePattern}\\.?\\s*`, 'i'), '').trim();
+            cleanOblText = cleanOblText.replace(/^[\d.]+\.?\s*/, '').trim();
+
+            const encabezado_obligacion = `${cleanCode}. ${cleanOblText}`;
+
             let comment = (act.comment && act.comment.trim().length > 0)
                 ? act.comment.trim()
                 : 'Actividades ejecutadas a satisfacción durante el periodo reportado.';
+
+            // Quitar numeración previa si el contratista ya la escribió (ej: "5 " o "5. ")
+            comment = comment.replace(new RegExp(`^${actNum}[.\\s-]+\\s*`, 'i'), '').trim();
+            comment = comment.replace(/^\d+[.\s-]+\s*/, '').trim();
 
             const fotos = [];
             const documentos = [];
@@ -631,7 +667,7 @@ const generateBillingPackage = async (periodId, userId) => {
                             if (hasCustomCaption) {
                                 captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: ${rawDesc}`;
                             } else {
-                                captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: Soporte de ejecución de la obligación ${code}`;
+                                captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: Soporte de ejecución de la obligación ${cleanCode}`;
                             }
                         } else {
                             if (hasCustomCaption) {
@@ -647,7 +683,7 @@ const generateBillingPackage = async (periodId, userId) => {
                         });
 
                         fotos_evidencias.push({
-                            codigo: totalPhotos > 1 ? `${code} (${photoIndex}/${totalPhotos})` : code,
+                            codigo: totalPhotos > 1 ? `${cleanCode} (${photoIndex}/${totalPhotos})` : cleanCode,
                             descripcion: captionText,
                             foto: photoBuffer
                         });
@@ -666,15 +702,23 @@ const generateBillingPackage = async (periodId, userId) => {
             const tieneDocumentos = documentos.length > 0;
             const enunciadoDocumentos = tieneDocumentos ? documentos.map(d => d.nombre).join(', ') : '';
 
-            // Si hay documentos soporte, agregar la referencia dentro del texto de la actividad
-            if (tieneDocumentos && !comment.toLowerCase().includes('.pdf') && !comment.toLowerCase().includes('.xlsx') && !comment.toLowerCase().includes(enunciadoDocumentos.toLowerCase())) {
-                comment += ` (Ver documento(s) de soporte digital anexo(s): ${enunciadoDocumentos}).`;
+            // Validar si ya contiene la referencia a la carpeta y anexo
+            const hasAnnexRef = /carpeta\s*[\d.]*\s*anexo\s*[\d.]*/i.test(comment);
+            if (!hasAnnexRef) {
+                if (!comment.endsWith('.')) {
+                    comment += '.';
+                }
+                comment += ` carpeta${cleanCode} Anexo ${actNum}.1.`;
             }
 
+            const texto_actividad = `${actNum} ${comment}`;
+
             lista_actividades.push({
-                num: (i + 1).toString(),
-                codigo: code,
-                texto: text,
+                num: actNum,
+                codigo: cleanCode,
+                texto: cleanOblText,
+                encabezado_obligacion,
+                texto_actividad,
                 comentario: comment,
                 fotos,
                 tiene_fotos: fotos.length > 0,
@@ -689,11 +733,14 @@ const generateBillingPackage = async (periodId, userId) => {
                 num: "1",
                 codigo: "2.1",
                 texto: "Ejecución de actividades contractuales",
+                encabezado_obligacion: "2.1. Ejecución de actividades contractuales",
+                texto_actividad: "1 No se registraron actividades en el periodo reportado. carpeta2.1 Anexo 1.1.",
                 comentario: "No se registraron actividades en el periodo reportado.",
                 fotos: [],
                 tiene_fotos: false,
                 documentos: [],
-                tiene_documentos: false
+                tiene_documentos: false,
+                enunciado_documentos: ""
             });
         }
 
