@@ -7,6 +7,7 @@ const BillingPeriod = require('../models/BillingPeriod');
 const TelegramPrivilege = require('../models/TelegramPrivilege');
 const PaymentConfig = require('../models/PaymentConfig');
 const PaymentReceipt = require('../models/PaymentReceipt');
+const storageService = require('../services/storage.service');
 
 const TEMPLATES_DIR = path.resolve(__dirname, '..', 'templates');
 
@@ -480,9 +481,25 @@ function resolveSafeFilePath(filePath) {
     return null;
 }
 
-function getFileInfo(filePath) {
-    if (!filePath) return { exists: false, size: 0, mtime: null, resolvedPath: null, fileUrl: null, fileName: '' };
+function getFileInfo(filePath, extraDriveId = null) {
+    if (!filePath) return { exists: false, size: 0, mtime: null, resolvedPath: null, fileUrl: null, fileName: '', isDrive: false };
+
+    const driveId = extraDriveId || storageService.extractDriveId(filePath);
     const baseName = path.basename(filePath);
+
+    // If file is stored in Google Drive
+    if (driveId) {
+        return {
+            exists: true,
+            size: 0,
+            mtime: null,
+            resolvedPath: filePath,
+            fileUrl: filePath.startsWith('/api/drive/') ? filePath : `/api/drive/file/${driveId}/${encodeURIComponent(baseName || 'archivo')}`,
+            fileName: baseName,
+            isDrive: true
+        };
+    }
+
     const resolved = resolveSafeFilePath(filePath);
     let size = 0;
     let mtime = null;
@@ -507,7 +524,8 @@ function getFileInfo(filePath) {
         mtime,
         resolvedPath: resolved,
         fileUrl,
-        fileName: baseName
+        fileName: baseName,
+        isDrive: false
     };
 }
 
@@ -565,6 +583,7 @@ exports.getAllDocuments = async (req, res) => {
                         fileUrl: info.fileUrl,
                         fileSize: info.size,
                         exists: info.exists,
+                        isDrive: info.isDrive,
                         uploadedAt: info.mtime || contract.createdAt,
                         contractor: {
                             id: contractorUser._id,
@@ -608,6 +627,7 @@ exports.getAllDocuments = async (req, res) => {
                     fileUrl: info.fileUrl,
                     fileSize: info.size,
                     exists: info.exists,
+                    isDrive: info.isDrive,
                     uploadedAt: info.mtime || bp.createdAt,
                     periodInfo: {
                         periodId: bp._id,
@@ -644,6 +664,7 @@ exports.getAllDocuments = async (req, res) => {
                     fileUrl: info.fileUrl,
                     fileSize: info.size,
                     exists: info.exists,
+                    isDrive: info.isDrive,
                     uploadedAt: info.mtime || bp.createdAt,
                     periodInfo: {
                         periodId: bp._id,
@@ -674,7 +695,7 @@ exports.getAllDocuments = async (req, res) => {
                     if (act.evidences && act.evidences.length > 0) {
                         act.evidences.forEach((ev, evIdx) => {
                             if (ev.path && ev.path.trim()) {
-                                const info = getFileInfo(ev.path);
+                                const info = getFileInfo(ev.path, ev.driveId);
                                 documents.push({
                                     id: `evidence_${ev._id || `${bp._id}_${actIdx}_${evIdx}`}`,
                                     docType: 'evidence',
@@ -684,6 +705,7 @@ exports.getAllDocuments = async (req, res) => {
                                     fileUrl: info.fileUrl,
                                     fileSize: info.size,
                                     exists: info.exists,
+                                    isDrive: info.isDrive,
                                     uploadedAt: info.mtime || bp.createdAt,
                                     periodInfo: {
                                         periodId: bp._id,
@@ -742,10 +764,7 @@ exports.deleteDocument = async (req, res) => {
             const filePath = contract[field];
             if (filePath) {
                 deletedFileName = path.basename(filePath);
-                const resolved = resolveSafeFilePath(filePath);
-                if (resolved && fs.existsSync(resolved)) {
-                    try { fs.unlinkSync(resolved); } catch (_) {}
-                }
+                await storageService.deleteFile(filePath);
                 contract[field] = '';
                 await contract.save();
             }
@@ -756,10 +775,7 @@ exports.deleteDocument = async (req, res) => {
             const filePath = period.securitySocialPath;
             if (filePath) {
                 deletedFileName = path.basename(filePath);
-                const resolved = resolveSafeFilePath(filePath);
-                if (resolved && fs.existsSync(resolved)) {
-                    try { fs.unlinkSync(resolved); } catch (_) {}
-                }
+                await storageService.deleteFile(filePath);
                 period.securitySocialPath = '';
                 await period.save();
             }
@@ -770,10 +786,7 @@ exports.deleteDocument = async (req, res) => {
             const filePath = period.zipPath;
             if (filePath) {
                 deletedFileName = path.basename(filePath);
-                const resolved = resolveSafeFilePath(filePath);
-                if (resolved && fs.existsSync(resolved)) {
-                    try { fs.unlinkSync(resolved); } catch (_) {}
-                }
+                await storageService.deleteFile(filePath);
                 period.zipPath = '';
                 await period.save();
             }
@@ -802,10 +815,7 @@ exports.deleteDocument = async (req, res) => {
             }
 
             if (fileFound) {
-                const resolved = resolveSafeFilePath(fileFound);
-                if (resolved && fs.existsSync(resolved)) {
-                    try { fs.unlinkSync(resolved); } catch (_) {}
-                }
+                await storageService.deleteFile(fileFound);
             }
             await period.save();
         } else {

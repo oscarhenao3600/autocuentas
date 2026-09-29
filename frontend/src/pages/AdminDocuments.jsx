@@ -402,33 +402,57 @@ export default function AdminDocuments() {
 
                                                     {/* File Size */}
                                                     <td style={{ padding: '0.9rem 1rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                                        {doc.exists ? formatBytes(doc.fileSize) : <span style={{ color: 'var(--error)' }}>No en disco</span>}
+                                                        {doc.exists ? (
+                                                            doc.fileSize > 0 ? formatBytes(doc.fileSize) : (doc.isDrive ? <span style={{ color: '#38bdf8' }}>☁️ En Google Drive</span> : '0 B')
+                                                        ) : (
+                                                            <span style={{ color: 'var(--error)' }}>No en disco</span>
+                                                        )}
                                                     </td>
 
                                                     {/* Actions: View & Delete */}
                                                     <td style={{ padding: '0.9rem 1rem', textAlign: 'center' }}>
                                                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'center' }}>
                                                             {/* View / Download button */}
-                                                            <a 
-                                                                href={doc.fileUrl} 
-                                                                target="_blank" 
-                                                                rel="noopener noreferrer"
-                                                                className="btn"
-                                                                title="Ver o descargar archivo"
-                                                                style={{ 
-                                                                    padding: '0.35rem 0.6rem', 
-                                                                    fontSize: '0.75rem', 
-                                                                    display: 'inline-flex', 
-                                                                    alignItems: 'center', 
-                                                                    gap: '0.25rem',
-                                                                    background: 'rgba(59, 130, 246, 0.1)',
-                                                                    color: 'var(--primary)',
-                                                                    border: '1px solid rgba(59, 130, 246, 0.25)',
-                                                                    borderRadius: 'var(--radius-md)'
-                                                                }}
-                                                            >
-                                                                <Eye size={13} /> Ver
-                                                            </a>
+                                                            {doc.exists ? (
+                                                                <a 
+                                                                    href={doc.fileUrl} 
+                                                                    target="_blank" 
+                                                                    rel="noopener noreferrer"
+                                                                    className="btn"
+                                                                    title="Ver o descargar archivo"
+                                                                    style={{ 
+                                                                        padding: '0.35rem 0.6rem', 
+                                                                        fontSize: '0.75rem', 
+                                                                        display: 'inline-flex', 
+                                                                        alignItems: 'center', 
+                                                                        gap: '0.25rem',
+                                                                        background: 'rgba(59, 130, 246, 0.1)',
+                                                                        color: 'var(--primary)',
+                                                                        border: '1px solid rgba(59, 130, 246, 0.25)',
+                                                                        borderRadius: 'var(--radius-md)'
+                                                                    }}
+                                                                >
+                                                                    <Eye size={13} /> Ver
+                                                                </a>
+                                                            ) : (
+                                                                <span 
+                                                                    className="btn" 
+                                                                    title="El archivo no existe físicamente en el servidor ni en Google Drive"
+                                                                    style={{ 
+                                                                        padding: '0.35rem 0.6rem', 
+                                                                        fontSize: '0.75rem', 
+                                                                        display: 'inline-flex', 
+                                                                        alignItems: 'center', 
+                                                                        gap: '0.25rem',
+                                                                        opacity: 0.35,
+                                                                        cursor: 'not-allowed',
+                                                                        background: 'rgba(255, 255, 255, 0.05)',
+                                                                        borderRadius: 'var(--radius-md)'
+                                                                    }}
+                                                                >
+                                                                    <Eye size={13} /> Ver
+                                                                </span>
+                                                            )}
 
                                                             {/* Delete button */}
                                                             <button 
