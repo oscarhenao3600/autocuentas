@@ -48,7 +48,9 @@ function parseDateSafe(dateInput) {
 function formatDateEs(dateInput) {
     const d = parseDateSafe(dateInput);
     if (!d) return '';
-    return `${d.getDate()} de ${MONTHS_ES[d.getMonth()]} de ${d.getFullYear()}`;
+    const m = MONTHS_ES[d.getMonth()];
+    const capMonth = m.charAt(0).toUpperCase() + m.slice(1);
+    return `${d.getDate()} de ${capMonth} de ${d.getFullYear()}`;
 }
 
 function formatDateNumeric(dateInput) {
@@ -377,10 +379,26 @@ const generateBillingPackage = async (periodId, userId) => {
         const totalValFormatted = Number(contract.totalValue || 0).toLocaleString('es-CO');
         const monthlyValFormatted = Number(contract.monthlyValue || 0).toLocaleString('es-CO');
         const remainingValFormatted = remainingVal.toLocaleString('es-CO');
-        const saludValFormatted = Number(period.securitySocial?.saludPaid || 0).toLocaleString('es-CO');
-        const pensionValFormatted = Number(period.securitySocial?.pensionPaid || 0).toLocaleString('es-CO');
-        const arlValFormatted = Number(period.securitySocial?.arlPaid || 0).toLocaleString('es-CO');
-        const ssTotalFormatted = Number(period.securitySocial?.totalPaid || 0).toLocaleString('es-CO');
+
+        // Security Social values formatting with intelligent fallbacks
+        let ssOperator = period.securitySocial?.operator || 'SIMPLE';
+        let ssPlanilla = period.securitySocial?.planillaNumber || '';
+        let rawSalud = Number(period.securitySocial?.saludPaid || 0);
+        let rawPension = Number(period.securitySocial?.pensionPaid || 0);
+        let rawArl = Number(period.securitySocial?.arlPaid || 0);
+        let rawTotalSS = Number(period.securitySocial?.totalPaid || 0);
+
+        if (rawTotalSS === 0) {
+            rawSalud = Math.round(ibc * 0.125);
+            rawPension = Math.round(ibc * 0.16);
+            rawArl = Math.round(ibc * 0.00522);
+            rawTotalSS = rawSalud + rawPension + rawArl;
+        }
+
+        const saludValFormatted = rawSalud.toLocaleString('es-CO');
+        const pensionValFormatted = rawPension.toLocaleString('es-CO');
+        const arlValFormatted = rawArl.toLocaleString('es-CO');
+        const ssTotalFormatted = rawTotalSS.toLocaleString('es-CO');
 
         // Tax / Retención options
         const takesCosts = !!contract.takesCosts;
@@ -440,6 +458,20 @@ const generateBillingPackage = async (periodId, userId) => {
             evidenciasEjecucionTexto = formatEvidencesText(period.activities);
         }
 
+        // Effective end date calculation fallback (e.g. from executionTerm or initialDurationMonths)
+        let effectiveEndDate = contract.endDate;
+        if (!effectiveEndDate && contract.startDate) {
+            const daysMatch = (contract.executionTerm || '').match(/(\d+)\s*d[ií]as/i);
+            const numDays = daysMatch ? parseInt(daysMatch[1], 10) : (contract.initialDurationMonths ? contract.initialDurationMonths * 30 : null);
+            if (numDays) {
+                const sDate = parseDateSafe(contract.startDate);
+                if (sDate) {
+                    const eDate = new Date(sDate.getTime() + (numDays - 1) * 24 * 60 * 60 * 1000);
+                    effectiveEndDate = eDate.toISOString().split('T')[0];
+                }
+            }
+        }
+
         const commonData = {
             // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
             fecha_certificado:                 formatDateNumeric(period.periodTo),
@@ -449,8 +481,8 @@ const generateBillingPackage = async (periodId, userId) => {
             identificacion_contratista:        contract.idNumber || '',
             tipo_contrato:                     contract.contractType || 'Prestación de Servicios Profesionales',
             numero_contrato:                   contract.contractNumber || '',
-            fecha_acta_inicio:                 contract.startDate ? formatDateNumeric(contract.startDate) : '',
-            fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateNumeric(contract.additionEndDate) : (contract.endDate ? formatDateNumeric(contract.endDate) : ''),
+            fecha_acta_inicio:                 contract.startDate ? formatDateEs(contract.startDate) : '',
+            fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateEs(contract.additionEndDate) : (effectiveEndDate ? formatDateEs(effectiveEndDate) : ''),
             cdp:                               periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
             rp:                                periodIsAddition ? (contract.additionRp || contract.rp || '') : (contract.rp || ''),
             rubro_presupuestal:                periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
@@ -559,8 +591,8 @@ const generateBillingPackage = async (periodId, userId) => {
             supervisorDependency: contract.supervisorDependency || 'Secretaría de Planeación',
             contractorAddress: contract.contractorAddress || '',
             contractorPhone:   contract.contractorPhone   || '',
-            startDate:        contract.startDate ? formatDateNumeric(contract.startDate) : '',
-            endDate:          contract.endDate ? formatDateNumeric(contract.endDate) : '',
+            startDate:        contract.startDate ? formatDateEs(contract.startDate) : '',
+            endDate:          (periodIsAddition && contract.additionEndDate) ? formatDateEs(contract.additionEndDate) : (effectiveEndDate ? formatDateEs(effectiveEndDate) : ''),
             periodMonthYear,
             chkApoyo,
             chkProfesional,
