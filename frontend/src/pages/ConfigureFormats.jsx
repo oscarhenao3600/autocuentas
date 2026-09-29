@@ -157,7 +157,7 @@ const ConfigureFormats = () => {
             await fetchTemplates();
         } catch (error) {
             setMessage({
-                text: 'Error al subir plantillas: ' + (error.response?.data?.message || error.message),
+                text: 'Error al subir plantillas: ' + (error.response?.data?.error || error.response?.data?.message || error.message),
                 type: 'error'
             });
         } finally {

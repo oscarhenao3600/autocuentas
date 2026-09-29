@@ -214,18 +214,28 @@ exports.uploadTemplate = async (req, res) => {
             const canonicalName = getCanonicalTemplateName(file.originalname);
             const targetPath = path.join(TEMPLATES_DIR, canonicalName);
 
-            // Copy/Move uploaded temp file to templates directory
-            fs.copyFileSync(file.path, targetPath);
+            // Copy/Write uploaded file to templates directory (supports memoryStorage and diskStorage)
+            if (file.buffer) {
+                fs.writeFileSync(targetPath, file.buffer);
+            } else if (file.path && fs.existsSync(file.path)) {
+                fs.copyFileSync(file.path, targetPath);
+            } else {
+                throw new Error(`No se pudo leer el contenido del archivo ${file.originalname}`);
+            }
 
             // If the original name was different from canonical name, save original as well
             if (canonicalName !== file.originalname) {
                 const originalTargetPath = path.join(TEMPLATES_DIR, file.originalname);
-                fs.copyFileSync(file.path, originalTargetPath);
+                if (file.buffer) {
+                    fs.writeFileSync(originalTargetPath, file.buffer);
+                } else if (file.path && fs.existsSync(file.path)) {
+                    fs.copyFileSync(file.path, originalTargetPath);
+                }
             }
 
-            // Remove temp uploaded file
+            // Remove temp uploaded file if exists on disk
             try {
-                if (fs.existsSync(file.path)) {
+                if (file.path && fs.existsSync(file.path)) {
                     fs.unlinkSync(file.path);
                 }
             } catch (_) {}
@@ -233,7 +243,7 @@ exports.uploadTemplate = async (req, res) => {
             savedFiles.push({
                 originalName: file.originalname,
                 savedAs: canonicalName,
-                size: file.size
+                size: file.size || (file.buffer ? file.buffer.length : 0)
             });
         }
 
