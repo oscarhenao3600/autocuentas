@@ -84,24 +84,63 @@ exports.generateDocument = async (templateName, data) => {
             }
         }
 
+        // Map to store Buffers so that docxtemplater receives string keys (avoiding TypeError on Buffer objects)
+        const imageBufferMap = new Map();
+        let imgKeyCounter = 0;
+
+        function sanitizeImages(obj) {
+            if (!obj || typeof obj !== 'object') return obj;
+            if (Buffer.isBuffer(obj)) {
+                imgKeyCounter++;
+                const imgKey = `__img_buf_${imgKeyCounter}`;
+                imageBufferMap.set(imgKey, obj);
+                return imgKey;
+            }
+            if (Array.isArray(obj)) {
+                return obj.map(sanitizeImages);
+            }
+            const copy = { ...obj };
+            for (const key of Object.keys(copy)) {
+                const val = copy[key];
+                if (Buffer.isBuffer(val)) {
+                    imgKeyCounter++;
+                    const imgKey = `__img_buf_${imgKeyCounter}`;
+                    imageBufferMap.set(imgKey, val);
+                    copy[key] = imgKey;
+                } else if (typeof val === 'object' && val !== null) {
+                    copy[key] = sanitizeImages(val);
+                }
+            }
+            return copy;
+        }
+
+        const sanitizedData = sanitizeImages(data);
+
         // Configure ImageModule for Docxtemplater
         const imageOpts = {
             centered: true,
             fileType: "docx",
             getImage: function(tagValue) {
+                if (typeof tagValue === 'string' && imageBufferMap.has(tagValue)) {
+                    return imageBufferMap.get(tagValue);
+                }
                 if (Buffer.isBuffer(tagValue)) {
                     return tagValue;
                 }
                 if (typeof tagValue === 'string' && fs.existsSync(tagValue)) {
-                    return fs.readFileSync(tagValue);
+                    try {
+                        return fs.readFileSync(tagValue);
+                    } catch (_) {}
                 }
                 return null;
             },
             getSize: function(img, tagValue) {
                 try {
-                    const buf = Buffer.isBuffer(tagValue) 
-                        ? tagValue 
-                        : (typeof tagValue === 'string' && fs.existsSync(tagValue) ? fs.readFileSync(tagValue) : null);
+                    const buf = img || (typeof tagValue === 'string' && imageBufferMap.has(tagValue) 
+                        ? imageBufferMap.get(tagValue) 
+                        : (Buffer.isBuffer(tagValue) 
+                            ? tagValue 
+                            : (typeof tagValue === 'string' && fs.existsSync(tagValue) ? fs.readFileSync(tagValue) : null)));
                     if (buf) return getModerateImageSize(buf);
                     return [300, 200];
                 } catch (_) {
@@ -120,7 +159,7 @@ exports.generateDocument = async (templateName, data) => {
         });
 
         // Fill the template with data
-        doc.render(data);
+        doc.render(sanitizedData);
 
         const buf = doc.getZip().generate({
             type: "nodebuffer",
