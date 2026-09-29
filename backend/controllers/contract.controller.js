@@ -1,6 +1,6 @@
 const fs = require('fs');
 const Contract = require('../models/Contract');
-const { extractContractData, extractRpData, extractBankCertificateData, extractActaInicioData, extractRutData } = require('../services/gemini.service');
+const { extractContractData, extractRpData, extractBankCertificateData, extractActaInicioData, extractRutData, extractSecuritySocialData } = require('../services/gemini.service');
 const { filterSpecificObligations } = require('../utils/period.utils');
 const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
@@ -108,7 +108,39 @@ exports.uploadAttachments = async (req, res) => {
             }
         }
 
-        if (req.files.securitySocial) updates.securitySocialPath = req.files.securitySocial[0].path;
+        let securitySocialExtracted = null;
+
+        if (req.files.securitySocial) {
+            const file = req.files.securitySocial[0];
+            updates.securitySocialPath = file.path;
+
+            try {
+                console.log("Procesando Planilla de Seguridad Social con IA...");
+                securitySocialExtracted = await extractSecuritySocialData(file.path, {
+                    password: req.body.securitySocialPassword,
+                    candidatePasswords: candidates
+                });
+                console.log("Datos de seguridad social extraídos:", securitySocialExtracted);
+            } catch (err) {
+                if (err.code === 'PASSWORD_REQUIRED') {
+                    Object.assign(contract, updates);
+                    await contract.save();
+
+                    return res.status(200).json({
+                        requiresPassword: true,
+                        docType: 'securitySocial',
+                        invalidPassword: Boolean(req.body.securitySocialPassword),
+                        message: req.body.securitySocialPassword
+                            ? "La contraseña ingresada es incorrecta para la planilla de seguridad social."
+                            : (candidates.length > 0
+                                ? "La planilla de seguridad social está protegida con contraseña. Intentamos abrirla automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarla con la IA."
+                                : "La planilla de seguridad social está protegida con contraseña. Por favor ingresa la contraseña para procesarla con la IA."),
+                        data: contract
+                    });
+                }
+                console.error("No se pudo extraer información de la planilla de seguridad social:", err.message);
+            }
+        }
 
         if (req.files.rut) {
             const file = req.files.rut[0];
@@ -141,7 +173,7 @@ exports.uploadAttachments = async (req, res) => {
                         message: req.body.rutPassword
                             ? "La contraseña ingresada es incorrecta para el RUT."
                             : (candidates.length > 0
-                                ? "El RUT está protegido con contraseña. Intentamos abrirlo automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarlo con la IA."
+                                ? "El RUT está protegido con contraseña. Intentamos abrirla automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarlo con la IA."
                                 : "El RUT está protegido con contraseña. Por favor ingresa la contraseña para procesarlo con la IA."),
                         data: contract
                     });
@@ -193,7 +225,15 @@ exports.uploadAttachments = async (req, res) => {
         await contract.save();
 
         let message = 'Anexos actualizados con éxito';
-        if (bankExtracted) {
+        if (securitySocialExtracted) {
+            if (securitySocialExtracted.unlockedWithCedula) {
+                message = 'Anexos actualizados y planilla de seguridad social desbloqueada automáticamente con tu cédula y procesada por la IA con éxito';
+            } else if (securitySocialExtracted.unlockedWithPassword) {
+                message = 'Anexos actualizados y planilla de seguridad social desbloqueada con la contraseña ingresada y procesada por la IA con éxito';
+            } else {
+                message = 'Anexos actualizados y planilla de seguridad social procesada por la IA con éxito';
+            }
+        } else if (bankExtracted) {
             if (bankExtracted.unlockedWithCedula) {
                 message = 'Anexos actualizados y certificado bancario desbloqueado automáticamente con tu cédula y procesado por la IA con éxito';
             } else if (bankExtracted.unlockedWithPassword) {
@@ -214,10 +254,59 @@ exports.uploadAttachments = async (req, res) => {
         res.json({
             message,
             data: contract,
-            extracted: bankExtracted || rutExtracted
+            extracted: securitySocialExtracted || bankExtracted || rutExtracted
         });
     } catch (error) {
         res.status(500).json({ message: 'Error al subir anexos', error: error.message });
+    }
+};
+
+exports.unlockSecuritySocial = async (req, res) => {
+    try {
+        const { password, contractId } = req.body;
+        if (!password || !password.trim()) {
+            return res.status(400).json({ message: 'Por favor ingresa la contraseña de la planilla de seguridad social' });
+        }
+
+        const contract = await resolveContract(req.user._id, contractId);
+        if (!contract || !contract.securitySocialPath) {
+            return res.status(404).json({ message: 'No hay una planilla de seguridad social cargada previamente' });
+        }
+
+        if (!fs.existsSync(contract.securitySocialPath)) {
+            return res.status(404).json({ message: 'El archivo de la planilla de seguridad social no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        }
+
+        try {
+            console.log("Intentando desbloquear planilla de seguridad social con contraseña ingresada...");
+            const securitySocialExtracted = await extractSecuritySocialData(contract.securitySocialPath, {
+                password: password.trim(),
+                candidatePasswords: []
+            });
+
+            await contract.save();
+
+            return res.json({
+                success: true,
+                message: '¡Planilla de seguridad social desbloqueada y procesada por IA con éxito!',
+                data: contract,
+                extracted: securitySocialExtracted
+            });
+        } catch (err) {
+            if (err.code === 'PASSWORD_REQUIRED') {
+                return res.status(400).json({
+                    requiresPassword: true,
+                    docType: 'securitySocial',
+                    invalidPassword: true,
+                    message: 'Contraseña incorrecta. Por favor verifica e intenta nuevamente.'
+                });
+            }
+            return res.status(500).json({
+                message: 'Error al procesar la planilla de seguridad social: ' + err.message
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Error al desbloquear planilla de seguridad social', error: error.message });
     }
 };
 

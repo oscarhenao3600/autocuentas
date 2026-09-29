@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText,
     Shield, Plus, Trash2, AlertCircle, Package, Download,
-    MessageCircle, Clock, RefreshCw
+    MessageCircle, Clock, RefreshCw, Lock, Eye, EyeOff, X
 } from 'lucide-react';
 
 const STEP_LABELS = [
@@ -82,6 +82,12 @@ export default function BillingForm({ contract, onComplete }) {
     const [periodId, setPeriodId] = useState(null);
     const [result, setResult]   = useState(null);
     const [error, setError]     = useState('');
+    const [success, setSuccess] = useState('');
+    const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+    const [docPassword, setDocPassword] = useState('');
+    const [passwordError, setPasswordError] = useState('');
+    const [unlockingDoc, setUnlockingDoc] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
 
     const [selectedAct, setSelectedAct] = useState(1);
     const [periodData, setPeriodData] = useState({
@@ -145,6 +151,7 @@ export default function BillingForm({ contract, onComplete }) {
 
         setUploadingPlanilla(true);
         setError('');
+        setSuccess('');
         try {
             const { data } = await api.post('/billing/upload-planilla', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
@@ -152,20 +159,76 @@ export default function BillingForm({ contract, onComplete }) {
             if (data.filePath) {
                 setPlanillaPath(data.filePath);
             }
+
+            if (data.requiresPassword) {
+                setPasswordModalOpen(true);
+                setDocPassword('');
+                setPasswordError(data.message || 'La planilla de seguridad social está protegida con contraseña.');
+                return;
+            }
+
             const ext = data.data;
-            setSs({
-                operator: ext.operator || '',
-                planillaNumber: ext.planillaNumber || '',
-                period: ext.period || '',
-                totalPaid: ext.totalPaid || '',
-                saludPaid: ext.saludPaid || '',
-                pensionPaid: ext.pensionPaid || '',
-                arlPaid: ext.arlPaid || ''
-            });
+            if (ext) {
+                setSs({
+                    operator: ext.operator || '',
+                    planillaNumber: ext.planillaNumber || '',
+                    period: ext.period || '',
+                    totalPaid: ext.totalPaid || '',
+                    saludPaid: ext.saludPaid || '',
+                    pensionPaid: ext.pensionPaid || '',
+                    arlPaid: ext.arlPaid || ''
+                });
+            }
+            setSuccess(data.message || 'Planilla procesada con éxito por la IA.');
+            setTimeout(() => setSuccess(''), 6000);
         } catch (err) {
             setError('Error al procesar la planilla de seguridad social: ' + (err.response?.data?.message || err.message));
         } finally {
             setUploadingPlanilla(false);
+        }
+    };
+
+    const handleUnlockPlanillaSubmit = async (e) => {
+        if (e) e.preventDefault();
+        if (!docPassword.trim()) {
+            setPasswordError('Por favor ingresa la contraseña de la planilla.');
+            return;
+        }
+
+        setUnlockingDoc(true);
+        setPasswordError('');
+
+        try {
+            const { data } = await api.post('/billing/unlock-planilla', {
+                password: docPassword.trim(),
+                contractId: contract?._id,
+                filePath: planillaPath
+            });
+
+            if (data.filePath) {
+                setPlanillaPath(data.filePath);
+            }
+            if (data.data) {
+                const ext = data.data;
+                setSs({
+                    operator: ext.operator || '',
+                    planillaNumber: ext.planillaNumber || '',
+                    period: ext.period || '',
+                    totalPaid: ext.totalPaid || '',
+                    saludPaid: ext.saludPaid || '',
+                    pensionPaid: ext.pensionPaid || '',
+                    arlPaid: ext.arlPaid || ''
+                });
+            }
+
+            setPasswordModalOpen(false);
+            setDocPassword('');
+            setSuccess(data.message || '¡Planilla desbloqueada y procesada por IA con éxito!');
+            setTimeout(() => setSuccess(''), 6000);
+        } catch (err) {
+            setPasswordError(err.response?.data?.message || 'Error al desbloquear la planilla. Verifica la contraseña.');
+        } finally {
+            setUnlockingDoc(false);
         }
     };
 
@@ -540,18 +603,47 @@ export default function BillingForm({ contract, onComplete }) {
                                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, maxWidth: '480px' }}>
                                     Sube tu planilla de aportes de seguridad social (PDF) de este mes para que la IA extraiga el operador, planilla, periodo y valores pagados automáticamente.
                                 </p>
-                                <label className="btn" style={{ 
-                                    fontSize: '0.8rem', 
-                                    background: 'var(--primary)', 
-                                    color: 'white', 
-                                    cursor: 'pointer',
-                                    padding: '0.5rem 1rem',
-                                    borderRadius: 'var(--radius-md)',
-                                    opacity: uploadingPlanilla ? 0.7 : 1
-                                }}>
-                                    {uploadingPlanilla ? '⏳ Procesando Planilla...' : 'Subir Planilla del Mes (PDF)'}
-                                    <input type="file" style={{ display: 'none' }} onChange={handlePlanillaUpload} accept=".pdf" disabled={uploadingPlanilla} />
-                                </label>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                                    <label className="btn" style={{ 
+                                        fontSize: '0.8rem', 
+                                        background: 'var(--primary)', 
+                                        color: 'white', 
+                                        cursor: 'pointer',
+                                        padding: '0.5rem 1rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        opacity: uploadingPlanilla ? 0.7 : 1
+                                    }}>
+                                        {uploadingPlanilla ? '⏳ Procesando Planilla...' : (planillaPath ? 'Cambiar Planilla (PDF)' : 'Subir Planilla del Mes (PDF)')}
+                                        <input type="file" style={{ display: 'none' }} onChange={handlePlanillaUpload} accept=".pdf" disabled={uploadingPlanilla} />
+                                    </label>
+                                    {planillaPath && (!ss.planillaNumber || passwordModalOpen) && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setPasswordModalOpen(true);
+                                                setPasswordError('');
+                                                setDocPassword('');
+                                            }}
+                                            className="btn"
+                                            style={{
+                                                fontSize: '0.8rem',
+                                                border: '1px solid #f59e0b',
+                                                color: '#f59e0b',
+                                                background: 'rgba(245, 158, 11, 0.1)',
+                                                padding: '0.5rem 1rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                cursor: 'pointer',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px'
+                                            }}
+                                        >
+                                            <Lock size={14} /> Desbloquear con Clave
+                                        </button>
+                                    )}
+                                </div>
+                                {success && <p style={{ fontSize: '0.8rem', color: 'var(--success)', margin: 0 }}>{success}</p>}
+                                {error && <p style={{ fontSize: '0.8rem', color: 'var(--error)', margin: 0 }}>{error}</p>}
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
@@ -680,6 +772,147 @@ export default function BillingForm({ contract, onComplete }) {
 
                 </AnimatePresence>
             </div>
+
+            {/* Modal para solicitar contraseña de la planilla de seguridad social */}
+            {passwordModalOpen && (
+                <div 
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                        backdropFilter: 'blur(5px)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 9999,
+                        padding: '1rem'
+                    }}
+                >
+                    <motion.div 
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        className="glass"
+                        style={{
+                            width: '100%',
+                            maxWidth: '460px',
+                            padding: '2rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: '1px solid rgba(245, 158, 11, 0.4)',
+                            background: '#181b26',
+                            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6)'
+                        }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <div style={{ 
+                                    width: '42px', 
+                                    height: '42px', 
+                                    borderRadius: '50%', 
+                                    background: 'rgba(245, 158, 11, 0.15)', 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    justifyContent: 'center',
+                                    border: '1px solid rgba(245, 158, 11, 0.3)'
+                                }}>
+                                    <Lock size={22} color="#f59e0b" />
+                                </div>
+                                <div>
+                                    <h3 style={{ fontSize: '1.15rem', fontWeight: '700', color: 'var(--text-main)', margin: 0 }}>
+                                        Planilla Protegida con Contraseña
+                                    </h3>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                                        Desbloqueo para extracción con IA
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setPasswordModalOpen(false);
+                                    setPasswordError('');
+                                }}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: 'var(--text-muted)',
+                                    cursor: 'pointer',
+                                    padding: '4px'
+                                }}
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <p style={{ fontSize: '0.875rem', color: 'var(--text-main)', marginBottom: '1.25rem', lineHeight: '1.5' }}>
+                            Esta planilla de seguridad social tiene clave de seguridad. Intentamos abrirla automáticamente con tu número de cédula, pero no coincidió. Por favor escribe la contraseña del documento para que la IA pueda procesarlo:
+                        </p>
+
+                        <form onSubmit={handleUnlockPlanillaSubmit}>
+                            <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                                <label className="label" style={{ fontSize: '0.8rem', fontWeight: '600', marginBottom: '0.5rem', display: 'block' }}>
+                                    Contraseña de la Planilla
+                                </label>
+                                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                    <input 
+                                        type={showPassword ? 'text' : 'password'}
+                                        className="input"
+                                        placeholder="Ingresa la contraseña del PDF"
+                                        value={docPassword}
+                                        onChange={(e) => setDocPassword(e.target.value)}
+                                        autoFocus
+                                        style={{ paddingRight: '2.5rem', width: '100%' }}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        style={{
+                                            position: 'absolute',
+                                            right: '10px',
+                                            background: 'none',
+                                            border: 'none',
+                                            color: 'var(--text-muted)',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center'
+                                        }}
+                                    >
+                                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                    </button>
+                                </div>
+                                {passwordError && (
+                                    <p style={{ color: 'var(--error)', fontSize: '0.75rem', marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <AlertCircle size={14} /> {passwordError}
+                                    </p>
+                                )}
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setPasswordModalOpen(false);
+                                        setPasswordError('');
+                                    }}
+                                    className="btn"
+                                    style={{ border: '1px solid var(--border)' }}
+                                    disabled={unlockingDoc}
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    type="submit"
+                                    className="btn btn-primary"
+                                    disabled={unlockingDoc}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                >
+                                    {unlockingDoc ? '⏳ Desbloqueando...' : 'Desbloquear y Procesar'}
+                                </button>
+                            </div>
+                        </form>
+                    </motion.div>
+                </div>
+            )}
         </div>
     );
 }

@@ -301,20 +301,34 @@ exports.extractBankCertificateData = async (filePath, options = {}) => {
     }
 };
 
-exports.extractSecuritySocialData = async (filePath) => {
+exports.extractSecuritySocialData = async (filePath, options = {}) => {
     try {
         const dataBuffer = fs.readFileSync(filePath);
         let text = "";
         let useMultimodal = false;
+        let unlockedWithCedula = false;
+        let unlockedWithPassword = false;
+        let usedPassword = null;
 
         if (filePath.endsWith('.pdf')) {
-            try {
-                text = await parsePdfText(dataBuffer);
-                if (!text || text.trim().length < 150) {
-                    useMultimodal = true;
+            // Check encryption and unlock with candidate passwords (e.g. user cédula)
+            const unlockResult = await unlockPdfWithCandidates(dataBuffer, {
+                password: options.password,
+                candidatePasswords: options.candidatePasswords,
+                targetSavePath: filePath
+            });
+
+            text = unlockResult.text;
+            usedPassword = unlockResult.usedPassword;
+            if (unlockResult.unlocked) {
+                unlockedWithPassword = true;
+                // If the used password matches any of the candidate passwords (cédula)
+                if (options.candidatePasswords && options.candidatePasswords.some(c => c && String(c).trim() === String(usedPassword))) {
+                    unlockedWithCedula = true;
                 }
-            } catch (err) {
-                console.warn("Extracción de texto planilla SS falló, usando Gemini multimodal OCR:", err.message);
+            }
+
+            if (!text || text.trim().length < 150) {
                 useMultimodal = true;
             }
         } else {
@@ -339,10 +353,12 @@ exports.extractSecuritySocialData = async (filePath) => {
         const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
         if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
             console.log("Procesando planilla de seguridad social escaneada o imagen. Usando modo multimodal de Gemini...");
+            // Re-read buffer in case unlockAndSaveCleanPdf overwrote it with clean unencrypted version
+            const freshBuffer = fs.readFileSync(filePath);
             const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
             const filePart = {
                 inlineData: {
-                    data: dataBuffer.toString("base64"),
+                    data: freshBuffer.toString("base64"),
                     mimeType: mimeType
                 }
             };
@@ -354,9 +370,23 @@ exports.extractSecuritySocialData = async (filePath) => {
         const response = await result.response;
         const jsonText = response.text().replace(/```json|```/g, "").trim();
         
-        return JSON.parse(jsonText);
+        const extracted = JSON.parse(jsonText);
+        return {
+            ...extracted,
+            unlockedWithCedula,
+            unlockedWithPassword,
+            usedPassword
+        };
     } catch (error) {
+        if (error.code === 'PASSWORD_REQUIRED') {
+            throw error;
+        }
         console.error("Error en extractSecuritySocialData:", error);
+        if (error.message && (error.message.includes('password') || error.message.includes('Password') || error.message.includes('no pages'))) {
+            const passErr = new Error("La planilla de seguridad social parece tener clave o estar protegida.");
+            passErr.code = "PASSWORD_REQUIRED";
+            throw passErr;
+        }
         throw new Error("No se pudo procesar la planilla de seguridad social con IA");
     }
 };

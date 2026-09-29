@@ -12,7 +12,8 @@ const {
     uploadActaInicio,
     getEvidenceReminderStatus,
     unlockBankCertificate,
-    unlockRut
+    unlockRut,
+    unlockSecuritySocial
 } = require('../controllers/contract.controller');
 const { protect } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
@@ -37,6 +38,9 @@ router.post('/unlock-bank-certificate', protect, unlockBankCertificate);
 
 // Route to unlock RUT with password
 router.post('/unlock-rut', protect, unlockRut);
+
+// Route to unlock Security Social Planilla with password
+router.post('/unlock-security-social', protect, unlockSecuritySocial);
 
 // Upload and process Acta de Inicio with Gemini AI
 router.post('/upload-acta-inicio', protect, upload.single('actaInicioFile'), uploadActaInicio);

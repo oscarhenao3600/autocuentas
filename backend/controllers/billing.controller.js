@@ -744,26 +744,149 @@ exports.uploadPlanillaSocial = async (req, res) => {
             return res.status(400).json({ message: 'Por favor suba la planilla de seguridad social' });
         }
 
-        console.log("Procesando planilla de seguridad social con IA...");
-        const extracted = await extractSecuritySocialData(req.file.path);
-        console.log("Datos de planilla extraídos:", extracted);
-
-        // Save filePath to user's contract if available
-        if (req.user && req.user._id) {
-            await Contract.findOneAndUpdate(
-                { user: req.user._id },
-                { securitySocialPath: req.file.path }
-            );
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = null;
+        if (contractId) {
+            contract = await Contract.findById(contractId);
+        }
+        if (!contract && req.user && req.user._id) {
+            contract = await Contract.findOne({ user: req.user._id }).sort({ createdAt: -1 });
         }
 
-        res.json({
-            message: 'Planilla procesada con éxito por la IA',
-            data: extracted,
-            filePath: req.file.path
-        });
+        // Gather candidate passwords: cédula from contract
+        const candidates = [];
+        if (contract && contract.idNumber) {
+            candidates.push(contract.idNumber.trim());
+            const cleanCedula = contract.idNumber.replace(/\D/g, '');
+            if (cleanCedula && cleanCedula !== contract.idNumber.trim()) {
+                candidates.push(cleanCedula);
+            }
+        }
+
+        try {
+            console.log("Procesando planilla de seguridad social con IA...");
+            const extracted = await extractSecuritySocialData(req.file.path, {
+                password: req.body.password,
+                candidatePasswords: candidates
+            });
+            console.log("Datos de planilla extraídos:", extracted);
+
+            // Save filePath to user's contract if available
+            if (contract) {
+                contract.securitySocialPath = req.file.path;
+                await contract.save();
+            } else if (req.user && req.user._id) {
+                await Contract.findOneAndUpdate(
+                    { user: req.user._id },
+                    { securitySocialPath: req.file.path }
+                );
+            }
+
+            let message = 'Planilla procesada con éxito por la IA';
+            if (extracted.unlockedWithCedula) {
+                message = 'Planilla de seguridad social desbloqueada automáticamente con tu cédula y procesada por la IA con éxito';
+            } else if (extracted.unlockedWithPassword) {
+                message = 'Planilla de seguridad social desbloqueada con la contraseña ingresada y procesada por la IA con éxito';
+            }
+
+            return res.json({
+                message,
+                data: extracted,
+                filePath: req.file.path,
+                unlockedWithCedula: extracted.unlockedWithCedula,
+                unlockedWithPassword: extracted.unlockedWithPassword
+            });
+        } catch (err) {
+            if (err.code === 'PASSWORD_REQUIRED') {
+                if (contract) {
+                    contract.securitySocialPath = req.file.path;
+                    await contract.save();
+                } else if (req.user && req.user._id) {
+                    await Contract.findOneAndUpdate(
+                        { user: req.user._id },
+                        { securitySocialPath: req.file.path }
+                    );
+                }
+
+                return res.status(200).json({
+                    requiresPassword: true,
+                    docType: 'securitySocial',
+                    invalidPassword: Boolean(req.body.password),
+                    message: req.body.password
+                        ? "La contraseña ingresada es incorrecta para la planilla de seguridad social."
+                        : (candidates.length > 0
+                            ? "La planilla de seguridad social está protegida con contraseña. Intentamos abrirla automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarla con la IA."
+                            : "La planilla de seguridad social está protegida con contraseña. Por favor ingresa la contraseña para procesarla con la IA."),
+                    filePath: req.file.path
+                });
+            }
+            throw err;
+        }
     } catch (error) {
         console.error('Error uploadPlanillaSocial:', error);
         res.status(500).json({ message: 'Error al procesar la planilla de seguridad social', error: error.message });
+    }
+};
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/billing/unlock-planilla  →  Unlock previously uploaded planilla with password
+// ──────────────────────────────────────────────────────────────
+exports.unlockPlanillaSocial = async (req, res) => {
+    try {
+        const { password, contractId, filePath } = req.body;
+        if (!password || !password.trim()) {
+            return res.status(400).json({ message: 'Por favor ingresa la contraseña de la planilla de seguridad social' });
+        }
+
+        let targetPath = filePath;
+        let contract = null;
+        if (contractId) {
+            contract = await Contract.findById(contractId);
+        }
+        if (!contract && req.user && req.user._id) {
+            contract = await Contract.findOne({ user: req.user._id }).sort({ createdAt: -1 });
+        }
+        if (!targetPath && contract) {
+            targetPath = contract.securitySocialPath;
+        }
+
+        if (!targetPath || !fs.existsSync(targetPath)) {
+            return res.status(404).json({ message: 'El archivo de la planilla no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        }
+
+        try {
+            console.log("Intentando desbloquear planilla de seguridad social con contraseña ingresada...");
+            const extracted = await extractSecuritySocialData(targetPath, {
+                password: password.trim(),
+                candidatePasswords: []
+            });
+
+            if (contract) {
+                contract.securitySocialPath = targetPath;
+                await contract.save();
+            }
+
+            return res.json({
+                success: true,
+                message: '¡Planilla de seguridad social desbloqueada y procesada por IA con éxito!',
+                data: extracted,
+                filePath: targetPath
+            });
+        } catch (err) {
+            if (err.code === 'PASSWORD_REQUIRED') {
+                return res.status(400).json({
+                    requiresPassword: true,
+                    docType: 'securitySocial',
+                    invalidPassword: true,
+                    message: 'Contraseña incorrecta. Por favor verifica e intenta nuevamente.'
+                });
+            }
+            return res.status(500).json({
+                message: 'Error al procesar la planilla con IA: ' + err.message
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Error al desbloquear planilla de seguridad social', error: error.message });
     }
 };
 

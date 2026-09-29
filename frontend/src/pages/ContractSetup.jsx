@@ -18,8 +18,9 @@ const ContractSetup = () => {
     const [success, setSuccess] = useState('');
     const [extractingBank, setExtractingBank] = useState(false);
     const [extractingRut, setExtractingRut] = useState(false);
+    const [extractingSecuritySocial, setExtractingSecuritySocial] = useState(false);
     const [passwordModalOpen, setPasswordModalOpen] = useState(false);
-    const [passwordDocType, setPasswordDocType] = useState('bankCertificate'); // 'bankCertificate' or 'rut'
+    const [passwordDocType, setPasswordDocType] = useState('bankCertificate'); // 'bankCertificate', 'rut', or 'securitySocial'
     const [docPassword, setDocPassword] = useState('');
     const [passwordError, setPasswordError] = useState('');
     const [unlockingDoc, setUnlockingDoc] = useState(false);
@@ -189,6 +190,8 @@ const ContractSetup = () => {
             setExtractingBank(true);
         } else if (type === 'rut') {
             setExtractingRut(true);
+        } else if (type === 'securitySocial') {
+            setExtractingSecuritySocial(true);
         }
         setError('');
         setSuccess('');
@@ -213,6 +216,8 @@ const ContractSetup = () => {
                 setSuccess(data.message || 'Certificación Bancaria subida y procesada por IA con éxito. Banco, Cuenta y Tipo de Cuenta autocompletados.');
             } else if (type === 'rut') {
                 setSuccess(data.message || 'RUT subido y procesado por IA con éxito. Datos fiscales y dirección autocompletados.');
+            } else if (type === 'securitySocial') {
+                setSuccess(data.message || 'Planilla de Seguridad Social subida y procesada por IA con éxito.');
             } else {
                 setSuccess('Anexo subido correctamente.');
             }
@@ -224,6 +229,8 @@ const ContractSetup = () => {
                 setExtractingBank(false);
             } else if (type === 'rut') {
                 setExtractingRut(false);
+            } else if (type === 'securitySocial') {
+                setExtractingSecuritySocial(false);
             }
         }
     };
@@ -240,7 +247,9 @@ const ContractSetup = () => {
 
         const endpoint = passwordDocType === 'rut'
             ? '/contracts/unlock-rut'
-            : '/contracts/unlock-bank-certificate';
+            : (passwordDocType === 'securitySocial'
+                ? '/contracts/unlock-security-social'
+                : '/contracts/unlock-bank-certificate');
 
         try {
             const { data } = await api.post(endpoint, {
@@ -761,10 +770,38 @@ const ContractSetup = () => {
                                     <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
                                         {contract.securitySocialPath ? 'Cargado en sistema' : 'Planilla de aportes'}
                                     </p>
-                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block' }}>
-                                        {contract.securitySocialPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
-                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'securitySocial')} accept=".pdf" />
-                                    </label>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+                                        <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: extractingSecuritySocial ? 0.7 : 1 }}>
+                                            {extractingSecuritySocial ? '⏳ Extrayendo...' : contract.securitySocialPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
+                                            <input type="file" style={{ display: 'none' }} onChange={(e) => handleAttachmentUpload(e, 'securitySocial')} accept=".pdf" disabled={extractingSecuritySocial} />
+                                        </label>
+                                        {contract.securitySocialPath && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setPasswordDocType('securitySocial');
+                                                    setPasswordModalOpen(true);
+                                                    setPasswordError('');
+                                                    setDocPassword('');
+                                                }}
+                                                className="btn"
+                                                style={{
+                                                    fontSize: '0.7rem',
+                                                    border: '1px solid #f59e0b',
+                                                    color: '#f59e0b',
+                                                    background: 'rgba(245, 158, 11, 0.1)',
+                                                    padding: '0.25rem 0.5rem',
+                                                    borderRadius: 'var(--radius-sm)',
+                                                    cursor: 'pointer',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px'
+                                                }}
+                                            >
+                                                <Lock size={12} /> Desbloquear con Clave
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -785,7 +822,7 @@ const ContractSetup = () => {
                     </form>
                 )}
 
-                {/* Modal para solicitar contraseña del certificado bancario */}
+                {/* Modal para solicitar contraseña de documentos */}
                 {passwordModalOpen && (
                     <div 
                         style={{
@@ -831,7 +868,11 @@ const ContractSetup = () => {
                                     </div>
                                     <div>
                                         <h3 style={{ fontSize: '1.15rem', fontWeight: '700', color: 'var(--text-main)' }}>
-                                            {passwordDocType === 'rut' ? 'RUT Protegido con Contraseña' : 'Certificado Protegido con Contraseña'}
+                                            {passwordDocType === 'rut' 
+                                                ? 'RUT Protegido con Contraseña' 
+                                                : (passwordDocType === 'securitySocial' 
+                                                    ? 'Planilla Protegida con Contraseña' 
+                                                    : 'Certificado Protegido con Contraseña')}
                                         </h3>
                                         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                             Desbloqueo para extracción con IA
@@ -857,19 +898,19 @@ const ContractSetup = () => {
                             </div>
 
                             <p style={{ fontSize: '0.875rem', color: 'var(--text-main)', marginBottom: '1.25rem', lineHeight: '1.5' }}>
-                                Este documento ({passwordDocType === 'rut' ? 'RUT' : 'PDF bancario'}) tiene clave de seguridad. Intentamos abrirlo automáticamente con tu número de cédula, pero no coincidió. Por favor escribe la contraseña del documento para que la IA pueda procesarlo:
+                                Este documento ({passwordDocType === 'rut' ? 'RUT' : (passwordDocType === 'securitySocial' ? 'Planilla de Seguridad Social' : 'PDF bancario')}) tiene clave de seguridad. Intentamos abrirlo automáticamente con tu número de cédula, pero no coincidió. Por favor escribe la contraseña del documento para que la IA pueda procesarlo:
                             </p>
 
                             <form onSubmit={handleUnlockDocSubmit}>
                                 <div className="form-group" style={{ marginBottom: '1.25rem' }}>
                                     <label className="label" style={{ fontSize: '0.8rem', fontWeight: '600', marginBottom: '0.5rem', display: 'block' }}>
-                                        {passwordDocType === 'rut' ? 'Contraseña del RUT' : 'Contraseña del Certificado'}
+                                        {passwordDocType === 'rut' ? 'Contraseña del RUT' : (passwordDocType === 'securitySocial' ? 'Contraseña de la Planilla' : 'Contraseña del Certificado')}
                                     </label>
                                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                                         <input 
                                             type={showPassword ? 'text' : 'password'}
                                             className="input"
-                                            placeholder={passwordDocType === 'rut' ? "Ingresa la contraseña del RUT" : "Ingresa la contraseña del PDF"}
+                                            placeholder={passwordDocType === 'rut' ? "Ingresa la contraseña del RUT" : (passwordDocType === 'securitySocial' ? "Ingresa la contraseña de la planilla" : "Ingresa la contraseña del PDF")}
                                             value={docPassword}
                                             onChange={(e) => setDocPassword(e.target.value)}
                                             autoFocus

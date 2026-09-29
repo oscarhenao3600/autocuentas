@@ -8,6 +8,7 @@ const {
     downloadPackage,
     getTelegramCode,
     uploadPlanillaSocial,
+    unlockPlanillaSocial,
     improveEvidenceText
 } = require('../controllers/billing.controller');
 const { protect }  = require('../middleware/auth.middleware');
@@ -25,6 +26,9 @@ router.get('/',              protect, listMyBillingPeriods);
 
 // Upload and process Security Social Planilla PDF with Gemini
 router.post('/upload-planilla', protect, upload.single('planillaFile'), uploadPlanillaSocial);
+
+// Unlock previously uploaded Planilla Social PDF with password
+router.post('/unlock-planilla', protect, unlockPlanillaSocial);
 
 // Improve evidence description using Gemini AI
 router.post('/improve-evidence-text', protect, improveEvidenceText);

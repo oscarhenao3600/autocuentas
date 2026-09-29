@@ -3325,7 +3325,14 @@ const handleIncomingMessage = async (message) => {
                         console.error('Error de IA en RUT:', aiErr);
                         await contract.save();
                         if (aiErr.code === 'PASSWORD_REQUIRED') {
-                            await sendTelegramMessage(chatId, `🔐 *RUT Protegido con Contraseña*\n\nTu RUT está protegido con clave e intentamos acceder con tu cédula (*${contract.idNumber || 'No registrada'}*), pero no coincidió.\n\nPor favor envía un PDF sin clave o desbloqueado.`);
+                            session.state = 'awaiting_doc_rut_password';
+                            session.pendingFilePath = fileInfo.absolutePath;
+                            session.pendingContractId = contract?._id;
+                            sessions.set(chatId, session);
+                            await sendTelegramKeyboardMessage(chatId, `🔐 *RUT Protegido con Contraseña*\n\nTu RUT tiene clave e intentamos abrirlo automáticamente con tu número de cédula (*${contract?.idNumber || 'No registrada'}*), pero no coincidió.\n\n👉 *Por favor escribe y envía la contraseña de tu RUT aquí por este chat:*`, [
+                                [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_rut' }]
+                            ]);
+                            return;
                         } else {
                             await sendTelegramMessage(chatId, `⚠️ Se guardó el RUT (${aiErr.message}).`);
                         }
@@ -3337,6 +3344,63 @@ const handleIncomingMessage = async (message) => {
             }
             await promptBank(chatId, user);
             return;
+        }
+
+        // Doc Step 4.1: Contraseña del RUT
+        if (session.state === 'awaiting_doc_rut_password') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            if (isSkip(text)) {
+                await sendTelegramMessage(chatId, '⏩ RUT omitido.');
+                await promptBank(chatId, user);
+                return;
+            }
+
+            const passwordEntered = text.trim();
+            if (!passwordEntered) {
+                await sendTelegramMessage(chatId, '⚠️ Por favor escribe la contraseña del RUT o presiona saltar:');
+                return;
+            }
+
+            await sendTelegramMessage(chatId, '⏳ Desbloqueando RUT y analizando con IA...');
+            try {
+                const extracted = await geminiService.extractRutData(session.pendingFilePath, {
+                    password: passwordEntered,
+                    candidatePasswords: []
+                });
+
+                let contract = session.pendingContractId
+                    ? await Contract.findById(session.pendingContractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
+
+                if (contract && extracted) {
+                    if (extracted.contractorAddress) contract.contractorAddress = extracted.contractorAddress;
+                    if (extracted.idCity) contract.idCity = extracted.idCity;
+                    if (typeof extracted.isTaxFiler === 'boolean') contract.isTaxFiler = extracted.isTaxFiler;
+                    if (extracted.contractorPhone && !contract.contractorPhone) contract.contractorPhone = extracted.contractorPhone;
+                    if (extracted.contractorEmail && !contract.contractorEmail) contract.contractorEmail = extracted.contractorEmail;
+                    await contract.save();
+                }
+
+                await sendTelegramMessage(chatId, `✅ ¡RUT desbloqueado y procesado con éxito con tu contraseña!\n📍 Dirección: ${contract?.contractorAddress || 'N/A'} (${contract?.idCity || ''})\n💼 Declarante de Renta: ${contract?.isTaxFiler ? 'Sí' : 'No'}`);
+                await promptBank(chatId, user);
+                return;
+            } catch (passErr) {
+                if (passErr.code === 'PASSWORD_REQUIRED') {
+                    await sendTelegramKeyboardMessage(chatId, '❌ La contraseña ingresada no es correcta para el RUT. Por favor escríbela nuevamente o presiona saltar:', [
+                        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_rut' }]
+                    ]);
+                    return;
+                }
+                await sendTelegramMessage(chatId, `⚠️ Error al procesar RUT: ${passErr.message}`);
+                await promptBank(chatId, user);
+                return;
+            }
         }
 
         // Doc Step 5: Certificación Bancaria
@@ -3393,7 +3457,14 @@ const handleIncomingMessage = async (message) => {
                         console.error('Error de IA en Certificación Bancaria:', aiErr);
                         await contract.save();
                         if (aiErr.code === 'PASSWORD_REQUIRED') {
-                            await sendTelegramMessage(chatId, `🔐 *Certificado Bancario Protegido con Contraseña*\n\nTu certificación bancaria está protegida con clave e intentamos acceder con tu cédula (*${contract.idNumber || 'No registrada'}*), pero no coincidió.\n\nPor favor envía un PDF sin clave o desbloqueado.`);
+                            session.state = 'awaiting_doc_bank_password';
+                            session.pendingFilePath = fileInfo.absolutePath;
+                            session.pendingContractId = contract?._id;
+                            sessions.set(chatId, session);
+                            await sendTelegramKeyboardMessage(chatId, `🔐 *Certificado Bancario Protegido con Contraseña*\n\nTu certificado bancario tiene clave e intentamos abrirlo automáticamente con tu número de cédula (*${contract?.idNumber || 'No registrada'}*), pero no coincidió.\n\n👉 *Por favor escribe y envía la contraseña de tu certificación bancaria aquí por este chat:*`, [
+                                [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_bank' }]
+                            ]);
+                            return;
                         } else {
                             await sendTelegramMessage(chatId, `⚠️ Se guardó la Certificación Bancaria (${aiErr.message}).`);
                         }
@@ -3405,6 +3476,61 @@ const handleIncomingMessage = async (message) => {
             }
             await promptSecuritySocial(chatId, user);
             return;
+        }
+
+        // Doc Step 5.1: Contraseña del Certificado Bancario
+        if (session.state === 'awaiting_doc_bank_password') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            if (isSkip(text)) {
+                await sendTelegramMessage(chatId, '⏩ Certificación Bancaria omitida.');
+                await promptSecuritySocial(chatId, user);
+                return;
+            }
+
+            const passwordEntered = text.trim();
+            if (!passwordEntered) {
+                await sendTelegramMessage(chatId, '⚠️ Por favor escribe la contraseña del certificado o presiona saltar:');
+                return;
+            }
+
+            await sendTelegramMessage(chatId, '⏳ Desbloqueando certificación bancaria y analizando con IA...');
+            try {
+                const extracted = await geminiService.extractBankCertificateData(session.pendingFilePath, {
+                    password: passwordEntered,
+                    candidatePasswords: []
+                });
+
+                let contract = session.pendingContractId
+                    ? await Contract.findById(session.pendingContractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
+
+                if (contract && extracted) {
+                    if (extracted.bankName) contract.bankName = extracted.bankName;
+                    if (extracted.accountNumber) contract.accountNumber = extracted.accountNumber;
+                    if (extracted.paymentMethod) contract.paymentMethod = extracted.paymentMethod;
+                    await contract.save();
+                }
+
+                await sendTelegramMessage(chatId, `✅ ¡Certificación Bancaria desbloqueada y procesada con éxito con tu contraseña!\n🏦 Banco: ${contract?.bankName || 'N/A'}\n💳 Cuenta: ${contract?.paymentMethod || 'Ahorros'} N° ${contract?.accountNumber || 'N/A'}`);
+                await promptSecuritySocial(chatId, user);
+                return;
+            } catch (passErr) {
+                if (passErr.code === 'PASSWORD_REQUIRED') {
+                    await sendTelegramKeyboardMessage(chatId, '❌ La contraseña ingresada no es correcta para el certificado. Por favor escríbela nuevamente o presiona saltar:', [
+                        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_bank' }]
+                    ]);
+                    return;
+                }
+                await sendTelegramMessage(chatId, `⚠️ Error al procesar certificado: ${passErr.message}`);
+                await promptSecuritySocial(chatId, user);
+                return;
+            }
         }
 
         // Doc Step 6: Planilla de Seguridad Social
@@ -3447,8 +3573,17 @@ const handleIncomingMessage = async (message) => {
                     $or: [{ contract: contract ? contract._id : null }, { contract: null }]
                 }).sort({ createdAt: -1 });
 
+                const candidates = [];
+                if (contract && contract.idNumber) {
+                    candidates.push(contract.idNumber.trim());
+                    const clean = contract.idNumber.replace(/\D/g, '');
+                    if (clean && clean !== contract.idNumber.trim()) candidates.push(clean);
+                }
+
                 try {
-                    const extracted = await geminiService.extractSecuritySocialData(fileInfo.absolutePath);
+                    const extracted = await geminiService.extractSecuritySocialData(fileInfo.absolutePath, {
+                        candidatePasswords: candidates
+                    });
                     if (extracted) {
                         if (billingPeriod) {
                             billingPeriod.securitySocialPath = fileInfo.relativePath;
@@ -3464,7 +3599,8 @@ const handleIncomingMessage = async (message) => {
                             await billingPeriod.save();
                         }
 
-                        let ssMsg = `✅ Planilla de Seguridad Social procesada con éxito.\n`;
+                        const note = extracted?.unlockedWithCedula ? ' (desbloqueada automáticamente con tu cédula)' : '';
+                        let ssMsg = `✅ Planilla de Seguridad Social procesada con éxito${note}.\n`;
                         if (extracted.operator) ssMsg += `🏢 Operador: ${extracted.operator}\n`;
                         if (extracted.planillaNumber) ssMsg += `🔢 N° Planilla: ${extracted.planillaNumber}\n`;
                         if (extracted.period) ssMsg += `📅 Periodo: ${extracted.period}\n`;
@@ -3482,7 +3618,19 @@ const handleIncomingMessage = async (message) => {
                         billingPeriod.securitySocialPath = fileInfo.relativePath;
                         await billingPeriod.save();
                     }
-                    await sendTelegramMessage(chatId, `⚠️ Se guardó el archivo de la Planilla, pero no se pudieron extraer todos los datos automáticamente (${aiErr.message}).`);
+                    if (aiErr.code === 'PASSWORD_REQUIRED') {
+                        session.state = 'awaiting_doc_planilla_password';
+                        session.pendingFilePath = fileInfo.absolutePath;
+                        session.pendingContractId = contract?._id;
+                        session.pendingBillingPeriodId = billingPeriod?._id;
+                        sessions.set(chatId, session);
+                        await sendTelegramKeyboardMessage(chatId, `🔐 *Planilla de Seguridad Social Protegida con Contraseña*\n\nTu planilla tiene clave e intentamos abrirla automáticamente con tu número de cédula (*${contract?.idNumber || 'No registrada'}*), pero no coincidió.\n\n👉 *Por favor escribe y envía la contraseña de tu planilla aquí por este chat:*`, [
+                            [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_planilla' }]
+                        ]);
+                        return;
+                    } else {
+                        await sendTelegramMessage(chatId, `⚠️ Se guardó el archivo de la Planilla, pero no se pudieron extraer todos los datos automáticamente (${aiErr.message}).`);
+                    }
                 }
             } catch (err) {
                 console.error('Error al procesar Planilla SS:', err);
@@ -3490,6 +3638,84 @@ const handleIncomingMessage = async (message) => {
             }
             await finishDocsFlow(chatId, user);
             return;
+        }
+
+        // Doc Step 6.1: Contraseña de la Planilla de Seguridad Social
+        if (session.state === 'awaiting_doc_planilla_password') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            if (isSkip(text)) {
+                await sendTelegramMessage(chatId, '⏩ Planilla de Seguridad Social omitida.');
+                await finishDocsFlow(chatId, user);
+                return;
+            }
+
+            const passwordEntered = text.trim();
+            if (!passwordEntered) {
+                await sendTelegramMessage(chatId, '⚠️ Por favor escribe la contraseña de la planilla o presiona saltar:');
+                return;
+            }
+
+            await sendTelegramMessage(chatId, '⏳ Desbloqueando Planilla de Seguridad Social y analizando con IA...');
+            try {
+                const extracted = await geminiService.extractSecuritySocialData(session.pendingFilePath, {
+                    password: passwordEntered,
+                    candidatePasswords: []
+                });
+
+                let contract = session.pendingContractId
+                    ? await Contract.findById(session.pendingContractId)
+                    : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
+
+                let billingPeriod = session.pendingBillingPeriodId
+                    ? await BillingPeriod.findById(session.pendingBillingPeriodId)
+                    : await BillingPeriod.findOne({
+                        user: user._id,
+                        $or: [{ contract: contract ? contract._id : null }, { contract: null }]
+                    }).sort({ createdAt: -1 });
+
+                if (extracted && billingPeriod) {
+                    billingPeriod.securitySocial = {
+                        operator: extracted.operator || '',
+                        planillaNumber: extracted.planillaNumber ? String(extracted.planillaNumber) : '',
+                        totalPaid: Number(extracted.totalPaid) || 0,
+                        saludPaid: Number(extracted.saludPaid) || 0,
+                        pensionPaid: Number(extracted.pensionPaid) || 0,
+                        arlPaid: Number(extracted.arlPaid) || 0,
+                        period: extracted.period || ''
+                    };
+                    await billingPeriod.save();
+                }
+
+                let ssMsg = `✅ ¡Planilla de Seguridad Social desbloqueada y procesada con éxito con tu contraseña!\n`;
+                if (extracted?.operator) ssMsg += `🏢 Operador: ${extracted.operator}\n`;
+                if (extracted?.planillaNumber) ssMsg += `🔢 N° Planilla: ${extracted.planillaNumber}\n`;
+                if (extracted?.period) ssMsg += `📅 Periodo: ${extracted.period}\n`;
+                if (extracted?.totalPaid) {
+                    ssMsg += `💰 Total Pagado: $${Number(extracted.totalPaid).toLocaleString('es-CO')}\n`;
+                    if (extracted.saludPaid) ssMsg += `  • Salud: $${Number(extracted.saludPaid).toLocaleString('es-CO')}\n`;
+                    if (extracted.pensionPaid) ssMsg += `  • Pensión: $${Number(extracted.pensionPaid).toLocaleString('es-CO')}\n`;
+                    if (extracted.arlPaid) ssMsg += `  • ARL: $${Number(extracted.arlPaid).toLocaleString('es-CO')}\n`;
+                }
+                await sendTelegramMessage(chatId, ssMsg);
+                await finishDocsFlow(chatId, user);
+                return;
+            } catch (passErr) {
+                if (passErr.code === 'PASSWORD_REQUIRED') {
+                    await sendTelegramKeyboardMessage(chatId, '❌ La contraseña ingresada no es correcta para la planilla. Por favor escríbela nuevamente o presiona saltar:', [
+                        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_planilla' }]
+                    ]);
+                    return;
+                }
+                await sendTelegramMessage(chatId, `⚠️ Error al procesar planilla: ${passErr.message}`);
+                await finishDocsFlow(chatId, user);
+                return;
+            }
         }
 
         // Upload Planilla for a specific BillingPeriod (Acta)
@@ -3529,14 +3755,24 @@ const handleIncomingMessage = async (message) => {
                 period.securitySocialPath = fileInfo.relativePath;
 
                 // Also update contract securitySocialPath
+                let refContract = null;
                 if (period.contract) {
-                    await Contract.findByIdAndUpdate(period.contract, { securitySocialPath: fileInfo.relativePath });
+                    refContract = await Contract.findByIdAndUpdate(period.contract, { securitySocialPath: fileInfo.relativePath }, { new: true });
                 } else {
-                    await Contract.findOneAndUpdate({ user: user._id }, { securitySocialPath: fileInfo.relativePath });
+                    refContract = await Contract.findOneAndUpdate({ user: user._id }, { securitySocialPath: fileInfo.relativePath }, { new: true });
+                }
+
+                const candidates = [];
+                if (refContract && refContract.idNumber) {
+                    candidates.push(refContract.idNumber.trim());
+                    const clean = refContract.idNumber.replace(/\D/g, '');
+                    if (clean && clean !== refContract.idNumber.trim()) candidates.push(clean);
                 }
 
                 try {
-                    const extracted = await geminiService.extractSecuritySocialData(fileInfo.absolutePath);
+                    const extracted = await geminiService.extractSecuritySocialData(fileInfo.absolutePath, {
+                        candidatePasswords: candidates
+                    });
                     if (extracted) {
                         period.securitySocial = {
                             operator: extracted.operator || '',
@@ -3549,7 +3785,8 @@ const handleIncomingMessage = async (message) => {
                         };
                         await period.save();
 
-                        let ssMsg = `✅ ¡Planilla de Seguridad Social guardada y vinculada al Acta N° ${period.actNumber}!\n\n`;
+                        const note = extracted?.unlockedWithCedula ? ' (desbloqueada automáticamente con tu cédula)' : '';
+                        let ssMsg = `✅ ¡Planilla de Seguridad Social guardada y vinculada al Acta N° ${period.actNumber}!${note}\n\n`;
                         if (extracted.operator) ssMsg += `🏢 Operador: ${extracted.operator}\n`;
                         if (extracted.planillaNumber) ssMsg += `🔢 N° Planilla: ${extracted.planillaNumber}\n`;
                         if (extracted.period) ssMsg += `📅 Periodo: ${extracted.period}\n`;
@@ -3564,7 +3801,19 @@ const handleIncomingMessage = async (message) => {
                 } catch (aiErr) {
                     console.error('Error IA planilla periodo:', aiErr);
                     await period.save();
-                    await sendTelegramMessage(chatId, `⚠️ Se guardó el archivo de la Planilla en el Acta N° ${period.actNumber}, pero no se pudieron extraer todos los datos automáticamente (${aiErr.message}).`);
+                    if (aiErr.code === 'PASSWORD_REQUIRED') {
+                        session.state = 'awaiting_period_planilla_password';
+                        session.pendingFilePath = fileInfo.absolutePath;
+                        session.periodId = period._id;
+                        session.refContractId = refContract?._id;
+                        sessions.set(chatId, session);
+                        await sendTelegramKeyboardMessage(chatId, `🔐 *Planilla de Seguridad Social Protegida con Contraseña*\n\nTu planilla tiene clave e intentamos abrirla automáticamente con tu número de cédula (*${refContract?.idNumber || 'No registrada'}*), pero no coincidió.\n\n👉 *Por favor escribe y envía la contraseña de tu planilla de seguridad social aquí por este chat:*`, [
+                            [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }]
+                        ]);
+                        return;
+                    } else {
+                        await sendTelegramMessage(chatId, `⚠️ Se guardó el archivo de la Planilla en el Acta N° ${period.actNumber}, pero no se pudieron extraer todos los datos automáticamente (${aiErr.message}).`);
+                    }
                 }
 
                 sessions.set(chatId, { state: 'idle' });
@@ -3573,6 +3822,85 @@ const handleIncomingMessage = async (message) => {
             } catch (err) {
                 console.error('Error al procesar planilla de periodo:', err);
                 await sendTelegramMessage(chatId, `❌ Error al procesar archivo: ${err.message}`);
+                return;
+            }
+        }
+
+        // Upload Planilla Password for a specific BillingPeriod (Acta)
+        if (session.state === 'awaiting_period_planilla_password') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            const periodId = session.periodId;
+            if (isNegative(text) || text.toLowerCase() === 'cancelar') {
+                sessions.set(chatId, { state: 'idle' });
+                await sendTelegramMessage(chatId, '❌ Desbloqueo de planilla cancelado.');
+                if (periodId) await showPeriodSummary(chatId, periodId);
+                return;
+            }
+
+            const passwordEntered = text.trim();
+            if (!passwordEntered) {
+                await sendTelegramMessage(chatId, '⚠️ Por favor escribe la contraseña de la planilla o presiona Cancelar:');
+                return;
+            }
+
+            await sendTelegramMessage(chatId, '⏳ Desbloqueando planilla de seguridad social y analizando con Inteligencia Artificial...');
+            try {
+                const extracted = await geminiService.extractSecuritySocialData(session.pendingFilePath, {
+                    password: passwordEntered,
+                    candidatePasswords: []
+                });
+
+                const period = await BillingPeriod.findById(periodId);
+                if (!period) {
+                    sessions.set(chatId, { state: 'idle' });
+                    await sendTelegramMessage(chatId, '⚠️ No se encontró el periodo del acta.');
+                    return;
+                }
+
+                if (extracted) {
+                    period.securitySocial = {
+                        operator: extracted.operator || '',
+                        planillaNumber: extracted.planillaNumber ? String(extracted.planillaNumber) : '',
+                        totalPaid: Number(extracted.totalPaid) || 0,
+                        saludPaid: Number(extracted.saludPaid) || 0,
+                        pensionPaid: Number(extracted.pensionPaid) || 0,
+                        arlPaid: Number(extracted.arlPaid) || 0,
+                        period: extracted.period || ''
+                    };
+                    await period.save();
+
+                    let ssMsg = `✅ ¡Planilla de Seguridad Social desbloqueada y vinculada al Acta N° ${period.actNumber} con tu contraseña!\n\n`;
+                    if (extracted.operator) ssMsg += `🏢 Operador: ${extracted.operator}\n`;
+                    if (extracted.planillaNumber) ssMsg += `🔢 N° Planilla: ${extracted.planillaNumber}\n`;
+                    if (extracted.period) ssMsg += `📅 Periodo: ${extracted.period}\n`;
+                    if (extracted.totalPaid) {
+                        ssMsg += `💰 Total Pagado: $${Number(extracted.totalPaid).toLocaleString('es-CO')}\n`;
+                        if (extracted.saludPaid) ssMsg += `  • Salud: $${Number(extracted.saludPaid).toLocaleString('es-CO')}\n`;
+                        if (extracted.pensionPaid) ssMsg += `  • Pensión: $${Number(extracted.pensionPaid).toLocaleString('es-CO')}\n`;
+                        if (extracted.arlPaid) ssMsg += `  • ARL: $${Number(extracted.arlPaid).toLocaleString('es-CO')}\n`;
+                    }
+                    await sendTelegramMessage(chatId, ssMsg);
+                }
+
+                sessions.set(chatId, { state: 'idle' });
+                await showPeriodSummary(chatId, period._id);
+                return;
+            } catch (passErr) {
+                if (passErr.code === 'PASSWORD_REQUIRED') {
+                    await sendTelegramKeyboardMessage(chatId, '❌ La contraseña ingresada no es correcta para la planilla. Por favor escríbela nuevamente o presiona Cancelar:', [
+                        [{ text: '❌ Cancelar', callback_data: `summary_${periodId}` }]
+                    ]);
+                    return;
+                }
+                await sendTelegramMessage(chatId, `⚠️ Error al procesar planilla: ${passErr.message}`);
+                sessions.set(chatId, { state: 'idle' });
+                if (periodId) await showPeriodSummary(chatId, periodId);
                 return;
             }
         }
