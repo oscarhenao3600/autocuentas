@@ -729,7 +729,7 @@ export default function BillingForm({ contract, onComplete }) {
                                 borderRadius: 'var(--radius-md)', marginBottom: '1.5rem',
                                 fontSize: '0.825rem', color: 'var(--text-muted)'
                             }}>
-                                <strong>Se generarán:</strong> Certificado del Supervisor · Informe de Actividades · Descuento de Estampillas · Retención en la Fuente + evidencias organizadas en un ZIP listo para entregar.
+                                <strong>Se generarán:</strong> Certificado del Supervisor · Informe de Actividades · Descuento de Estampillas · Retención en la Fuente + Anexos Descripción por obligación y evidencias organizadas en un ZIP listo para entregar.
                             </div>
 
                             <div style={{ display: 'flex', gap: '1rem' }}>

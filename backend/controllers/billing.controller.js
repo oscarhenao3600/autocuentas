@@ -5,7 +5,8 @@ const Contract        = require('../models/Contract');
 const User            = require('../models/User');
 const { generateDocument } = require('../services/document.service');
 const { createBillingZip } = require('../services/archive.service');
-const { extractSecuritySocialData, improveEvidenceText } = require('../services/gemini.service');
+const { extractSecuritySocialData, improveEvidenceText, generateObligationAnnexDescription } = require('../services/gemini.service');
+const annexService = require('../services/annex.service');
 const storageService = require('../services/storage.service');
 
 // ──────────────────────────────────────────────────────────────
@@ -69,9 +70,25 @@ function formatActivitiesText(acts) {
     return acts.map((act, i) => {
         const code = act.obligationCode || `2.2.${i + 1}`;
         const text = act.obligationText || '';
-        const comment = (act.comment && act.comment.trim().length > 0)
+        let comment = (act.comment && act.comment.trim().length > 0)
             ? act.comment.trim()
             : 'Actividades ejecutadas a satisfacción durante el periodo reportado.';
+
+        const docs = (act.evidences || []).filter(ev => !isImageEvidence(ev));
+        const photos = (act.evidences || []).filter(isImageEvidence);
+
+        if (docs.length > 0) {
+            const docNames = docs.map(d => d.filename || path.basename(d.path || 'Documento')).join(', ');
+            if (!comment.toLowerCase().includes('.pdf') && !comment.toLowerCase().includes('.xlsx') && !comment.toLowerCase().includes(docNames.toLowerCase())) {
+                comment += ` (Documento(s) soporte anexo(s): ${docNames}).`;
+            }
+        }
+
+        // Referencia directa al Anexo Descripción para el supervisor
+        if ((photos.length > 0 || docs.length > 0) && !comment.toLowerCase().includes('anexo descripcion')) {
+            comment += ` (Para mayor detalle y registro de evidencias, ver documento "Anexo Descripcion ${code}.docx" en la subcarpeta "${code}/" del paquete digital).`;
+        }
+
         return `Obligación ${code}: ${text}\nActividad desarrollada: ${comment}`;
     }).join('\n\n');
 }
@@ -88,29 +105,28 @@ function formatEvidencesText(acts) {
     return acts.map((act, i) => {
         const code = act.obligationCode || `2.2.${i + 1}`;
         if (!act.evidences || act.evidences.length === 0) {
-            return `Obligación ${code}: Sin soportes cargados`;
+            return `Obligación ${code}: Ver documento "Anexo Descripcion ${code}.docx" en carpeta "${code}/"`;
         }
 
         const photos = act.evidences.filter(isImageEvidence);
         const docs = act.evidences.filter(ev => !isImageEvidence(ev));
 
         const parts = [];
-        if (docs.length > 0) {
-            if (docs.length === 1) {
-                parts.push(`Anexo ${code}`);
-            } else {
-                parts.push(`Anexos ${docs.map((_, idx) => `${code}-${idx + 1}`).join(', ')}`);
-            }
-        }
+        parts.push(`Documento "Anexo Descripcion ${code}.docx" (carpeta "${code}/")`);
+
         if (photos.length > 0) {
             if (photos.length === 1) {
-                parts.push(`Registro fotográfico adjunto`);
+                parts.push(`Registro fotográfico (1 foto)`);
             } else {
-                parts.push(`Registro fotográfico adjunto (${photos.length} fotos)`);
+                parts.push(`Registro fotográfico (${photos.length} fotos)`);
             }
         }
+        if (docs.length > 0) {
+            const docNames = docs.map(d => d.filename || path.basename(d.path || 'Documento')).join(', ');
+            parts.push(`Soportes documentales / Excel: ${docNames}`);
+        }
 
-        return `Obligación ${code}: ${parts.join(', ')}`;
+        return `Obligación ${code}: ${parts.join(' | ')}`;
     }).join('\n');
 }
 
@@ -588,47 +604,71 @@ const generateBillingPackage = async (periodId, userId) => {
             const act = period.activities[i];
             const code = act.obligationCode || `2.2.${i + 1}`;
             const text = act.obligationText || '';
-            const comment = (act.comment && act.comment.trim().length > 0)
+            let comment = (act.comment && act.comment.trim().length > 0)
                 ? act.comment.trim()
                 : 'Actividades ejecutadas a satisfacción durante el periodo reportado.';
 
             const fotos = [];
             const documentos = [];
 
-            if (act.evidences && act.evidences.length > 0) {
-                const photos = act.evidences.filter(isImageEvidence);
-                let photoIndex = 0;
+            const imageEvidences = (act.evidences || []).filter(isImageEvidence);
+            const docEvidences = (act.evidences || []).filter(ev => !isImageEvidence(ev));
 
-                for (const ev of act.evidences) {
-                    if (isImageEvidence(ev) && (ev.path || ev.driveId)) {
-                        photoIndex++;
-                        const photoBuffer = await storageService.getFileBuffer(ev.path || ev.driveId);
-                        if (photoBuffer) {
-                            const totalPhotos = photos.length;
-                            const titleSuffix = totalPhotos > 1 ? ` (Evidencia ${photoIndex} de ${totalPhotos})` : '';
-                            const desc = (ev.description && ev.description.trim().length > 0)
-                                ? ev.description.trim()
-                                : (act.comment && act.comment.trim().length > 0 && totalPhotos === 1
-                                    ? act.comment.trim()
-                                    : (act.obligationText || `Soporte fotográfico de la obligación ${code}${titleSuffix}`));
+            const totalPhotos = imageEvidences.length;
+            let photoIndex = 0;
 
-                            fotos.push({
-                                descripcion: desc,
-                                foto: photoBuffer
-                            });
+            for (const ev of imageEvidences) {
+                if (ev.path || ev.driveId) {
+                    photoIndex++;
+                    const photoBuffer = await storageService.getFileBuffer(ev.path || ev.driveId);
+                    if (photoBuffer) {
+                        const rawDesc = (ev.description || '').trim();
+                        const isDuplicateComment = rawDesc.toLowerCase() === comment.toLowerCase();
+                        const hasCustomCaption = rawDesc.length > 0 && !isDuplicateComment;
 
-                            fotos_evidencias.push({
-                                codigo: `${code}${titleSuffix}`,
-                                descripcion: desc,
-                                foto: photoBuffer
-                            });
+                        let captionText;
+                        if (totalPhotos > 1) {
+                            if (hasCustomCaption) {
+                                captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: ${rawDesc}`;
+                            } else {
+                                captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: Soporte de ejecución de la obligación ${code}`;
+                            }
+                        } else {
+                            if (hasCustomCaption) {
+                                captionText = `Registro fotográfico: ${rawDesc}`;
+                            } else {
+                                captionText = `Registro fotográfico: Soporte de ejecución de la actividad`;
+                            }
                         }
-                    } else if (ev.filename || ev.path) {
-                        documentos.push({
-                            nombre: ev.filename || path.basename(ev.path || 'Documento adjunto')
+
+                        fotos.push({
+                            descripcion: captionText,
+                            foto: photoBuffer
+                        });
+
+                        fotos_evidencias.push({
+                            codigo: totalPhotos > 1 ? `${code} (${photoIndex}/${totalPhotos})` : code,
+                            descripcion: captionText,
+                            foto: photoBuffer
                         });
                     }
                 }
+            }
+
+            for (const ev of docEvidences) {
+                if (ev.filename || ev.path) {
+                    documentos.push({
+                        nombre: ev.filename || path.basename(ev.path || 'Documento adjunto')
+                    });
+                }
+            }
+
+            const tieneDocumentos = documentos.length > 0;
+            const enunciadoDocumentos = tieneDocumentos ? documentos.map(d => d.nombre).join(', ') : '';
+
+            // Si hay documentos soporte, agregar la referencia dentro del texto de la actividad
+            if (tieneDocumentos && !comment.toLowerCase().includes('.pdf') && !comment.toLowerCase().includes('.xlsx') && !comment.toLowerCase().includes(enunciadoDocumentos.toLowerCase())) {
+                comment += ` (Ver documento(s) de soporte digital anexo(s): ${enunciadoDocumentos}).`;
             }
 
             lista_actividades.push({
@@ -639,7 +679,8 @@ const generateBillingPackage = async (periodId, userId) => {
                 fotos,
                 tiene_fotos: fotos.length > 0,
                 documentos,
-                tiene_documentos: documentos.length > 0
+                tiene_documentos: tieneDocumentos,
+                enunciado_documentos: enunciadoDocumentos
             });
         }
 
@@ -682,9 +723,106 @@ const generateBillingPackage = async (periodId, userId) => {
         // Attach generated paths to period so archive.service can find them
         Object.assign(period, generatedPaths);
 
+        // ── Generar Formatos "Anexo Descripcion #[codigo]" para cada obligación ──
+        const outputDir = path.resolve(__dirname, '..', 'generated');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        for (let i = 0; i < (period.activities || []).length; i++) {
+            const act = period.activities[i];
+            const code = act.obligationCode || `2.2.${i + 1}`;
+            const text = act.obligationText || '';
+            const allEvidences = act.evidences || [];
+
+            const photos = allEvidences.filter(isImageEvidence);
+            const docs = allEvidences.filter(ev => !isImageEvidence(ev));
+
+            const annexImages = [];
+
+            // 1. Si hay fotos directas, cargarlas y escalarlas
+            if (photos.length > 0) {
+                for (const photoEv of photos) {
+                    try {
+                        const imgData = await annexService.renderEvidenceToImage(photoEv);
+                        if (imgData) annexImages.push(imgData);
+                    } catch (pErr) {
+                        console.warn(`⚠️ Error al procesar imagen para Anexo Obligación ${code}:`, pErr.message);
+                    }
+                }
+            }
+
+            // 2. Si la obligación SOLO cuenta con evidencias de documentos o Excel (o si no tiene fotos directas)
+            // Se extrae la captura/pantallazo de la primera página
+            if (photos.length === 0 && docs.length > 0) {
+                for (const docEv of docs) {
+                    try {
+                        const imgData = await annexService.renderEvidenceToImage(docEv);
+                        if (imgData) annexImages.push(imgData);
+                    } catch (dErr) {
+                        console.warn(`⚠️ Error al generar captura de primera página para soporte en Obligación ${code}:`, dErr.message);
+                    }
+                }
+            }
+
+            // Generar documento oficial de la obligación si tiene evidencias o descripción de labores
+            if (annexImages.length > 0 || (act.comment && act.comment.trim().length > 0)) {
+                try {
+                    // Generar descripción técnica de 100-150 palabras (o más si hay múltiples páginas)
+                    const extendedDesc = await generateObligationAnnexDescription({
+                        obligationCode: code,
+                        obligationText: text,
+                        contractorComment: act.comment,
+                        evidences: allEvidences,
+                        imageCount: Math.max(1, annexImages.length)
+                    });
+
+                    // Construir el documento Word oficial siguiendo el formato Anexo 2.2
+                    const annexBuf = await annexService.generateAnnexDocument({
+                        obligationCode: code,
+                        obligationText: text,
+                        images: annexImages,
+                        description: extendedDesc
+                    });
+
+                    const safeCode = (code || 'General').trim().replace(/[^a-zA-Z0-9.-]/g, '_');
+                    const annexFileName = `${Date.now()}-Anexo_Descripcion_${safeCode}.docx`;
+                    const annexFilePath = path.join(outputDir, annexFileName);
+                    fs.writeFileSync(annexFilePath, annexBuf);
+
+                    act.annexDescription = extendedDesc;
+                    act.annexDocPath = annexFilePath;
+
+                    // Opcional: Respaldar Anexo en Google Drive si está habilitado
+                    try {
+                        const safeName = (user.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_');
+                        const contractorFolder = `${contract?.idNumber || user?.cedula || user?._id}_${safeName}`;
+                        const driveUpload = await storageService.saveFile({
+                            buffer: annexBuf,
+                            filename: `Anexo Descripcion ${code}.docx`,
+                            mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                            pathSegments: ['Contratistas', contractorFolder, `Acta_${period.actNumber}`, 'Anexos_Descripcion']
+                        });
+                        act.annexDriveId = driveUpload.driveId;
+                    } catch (driveErr) {
+                        console.warn(`⚠️ No se pudo respaldar Anexo Descripción ${code} en Drive:`, driveErr.message);
+                    }
+
+                    console.log(`✅ Generado: Anexo Descripcion ${code}.docx con ${annexImages.length} imágenes y descripción técnica (${extendedDesc.split(/\s+/).length} palabras)`);
+                } catch (annexErr) {
+                    console.warn(`⚠️ Error al generar Anexo Descripción para Obligación ${code}:`, annexErr.message);
+                }
+            }
+        }
+
+        period.markModified('activities');
+
         // ── Create ZIP ────────────────────────────────────────────
         const zipPath = await createBillingZip(period, contract, user);
         period.zipPath = zipPath;
+        if (period.zipDriveId) {
+            period.markModified('zipDriveId');
+        }
         period.status  = 'pending'; // ready but not yet approved
         await period.save();
 
@@ -975,4 +1113,38 @@ exports.improveEvidenceText = async (req, res) => {
         res.status(500).json({ message: 'Error al mejorar el texto con IA', error: error.message });
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// GET /api/billing/:id/annex/:code  →  Download single Anexo Descripcion
+// ──────────────────────────────────────────────────────────────
+exports.downloadAnnexDocument = async (req, res) => {
+    try {
+        const period = await BillingPeriod.findOne({ _id: req.params.id, user: req.user._id });
+        if (!period) return res.status(404).json({ message: 'Periodo no encontrado' });
+
+        const targetCode = decodeURIComponent(req.params.code).trim();
+        const act = (period.activities || []).find(a => 
+            (a.obligationCode && a.obligationCode.trim() === targetCode) ||
+            (a.obligationCode && a.obligationCode.replace(/[^a-zA-Z0-9.-]/g, '_') === targetCode)
+        );
+
+        if (!act || (!act.annexDocPath && !act.annexDriveId)) {
+            return res.status(404).json({ message: `No se encontró el Anexo Descripción para la obligación ${targetCode}` });
+        }
+
+        const annexTarget = act.annexDocPath || act.annexDriveId;
+        const fileBuffer = await storageService.getFileBuffer(annexTarget);
+        if (!fileBuffer) {
+            return res.status(404).json({ message: 'No se pudo cargar el archivo del anexo solicitado' });
+        }
+
+        const fileName = `Anexo Descripcion ${targetCode}.docx`;
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.send(fileBuffer);
+    } catch (err) {
+        res.status(500).json({ message: 'Error al descargar el anexo', error: err.message });
+    }
+};
+
 

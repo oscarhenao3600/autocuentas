@@ -484,7 +484,7 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
             }
         }
 
-        await sendTelegramMessage(chatId, '⚙️ Generando tus 4 formatos oficiales (Informe de Actividades, Certificación del Supervisor, Retención en la Fuente, Estampillas) y empaquetando soportes...');
+        await sendTelegramMessage(chatId, '⚙️ Generando tus 4 formatos oficiales, los documentos "Anexo Descripción" con IA para cada obligación y empaquetando soportes...');
 
         const { period, zipPath } = await generateBillingPackage(periodId, user._id);
 
@@ -517,7 +517,7 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
                 await checkAndAdvancePaymentStatus(user, activeContract);
             }
 
-            await sendTelegramKeyboardMessage(chatId, `✅ Paquete de Cobro entregado en formato ZIP.\n\nContiene los 4 formatos oficiales en Word (.docx) con sus anexos y fotos organizadas, listos para ser editados o modificados desde tu computador.`, [
+            await sendTelegramKeyboardMessage(chatId, `✅ Paquete de Cobro entregado en formato ZIP.\n\nIncluye:\n• 4 Formatos oficiales Word (.docx)\n• Documentos "Anexo Descripción #[obligación]" con redacción técnica de 100-150 palabras y fotos/pantallazos de soporte\n• Carpetas organizadas con todos tus soportes`, [
                 [{ text: '📊 Volver al Resumen del Acta', callback_data: `summary_${period._id}` }],
                 [{ text: '📁 Ver Menú de Actas', callback_data: 'show_acts_menu' }]
             ]);
@@ -2286,7 +2286,7 @@ const handleCallbackQuery = async (callbackQuery) => {
             comment: (act && act.comment) || 'Actividad desarrollada en el periodo',
             activeContractId: period ? period.contract : null
         });
-        await sendTelegramKeyboardMessage(chatId, `📸 Envía la siguiente foto o archivo de soporte para la Obligación ${oblCode}.\n\n💡 *Tip profesional:* Si deseas que esta imagen tenga un texto descriptivo específico en el Informe de Actividades, puedes incluirlo en el *pie de foto (caption)* al enviarla.`, [
+        await sendTelegramKeyboardMessage(chatId, `📸 Envía la foto o soporte para la Obligación ${oblCode}.\n\n💡 *Recomendación:* Si vas a enviar varias fotos, escribe en el *pie de foto (caption)* la descripción de cada una para que queden identificadas individualmente en tu Informe de Actividades. Para documentos (PDF o Excel), puedes enviarlos directamente ya que se agrupan y referencian en un solo enunciado.`, [
             [{ text: '⬅️ Volver a Obligaciones', callback_data: `select_act_${period ? period.actNumber : 1}` }],
             [{ text: '📊 Resumen del Acta', callback_data: `summary_${periodId}` }]
         ]);
@@ -2582,7 +2582,7 @@ const handleIncomingMessage = async (message) => {
                     const caption = (message.caption || '').trim();
 
                     // Asignar descripción específica si el usuario escribió un pie de foto (caption)
-                    fileInfo.description = caption || session.comment || act.comment || '';
+                    fileInfo.description = caption || '';
 
                     // Actualizar comentario general de la obligación si no existía o si se redactó uno nuevo
                     if (session.comment && session.comment !== act.comment) {
@@ -2614,10 +2614,10 @@ const handleIncomingMessage = async (message) => {
                     confirmMsg += `📎 Total soportes cargados en esta obligación: ${totalEvs}\n`;
                     if (caption) {
                         confirmMsg += `📝 Texto específico asignado a esta imagen: "${caption}"\n\n`;
-                    } else {
-                        confirmMsg += `📝 Texto descriptivo: "${act.comment}"\n\n`;
+                    } else if (fileInfo.mimetype && fileInfo.mimetype.startsWith('image/')) {
+                        confirmMsg += `💡 *Tip sobre fotos:* Si envías varias fotos, puedes añadir un *pie de foto (caption)* a cada una para describirla individualmente en el informe.\n\n`;
                     }
-                    confirmMsg += `👉 ¿Deseas subir más fotos o documentos a esta misma obligación? Puedes enviar otra foto directamente (con pie de foto opcional) o seleccionar una opción:`;
+                    confirmMsg += `👉 ¿Deseas subir más fotos o documentos a esta misma obligación? Puedes enviar otro archivo directamente o seleccionar una opción:`;
 
                     await sendTelegramKeyboardMessage(chatId, confirmMsg, [
                         [

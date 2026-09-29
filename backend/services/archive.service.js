@@ -77,11 +77,17 @@ exports.createBillingZip = async (billingPeriod, contract, user) => {
             if (ssPath) await addFileToZip(ssPath, getZipDest('10-PLANILLA DE SEGURIDAD SOCIAL', ssPath));
         }
 
-        // 3. Copiar evidencias por actividad en subcarpetas estructuradas (ej: 2.2.1, 2.2.2)
+        // 3. Copiar evidencias y Anexo Descripción por actividad en subcarpetas estructuradas (ej: 2.2.1, 2.2.2)
         if (billingPeriod.activities && billingPeriod.activities.length > 0) {
             for (const act of billingPeriod.activities) {
-                const actFolderCode = act.obligationCode || 'Actividad';
+                const actFolderCode = (act.obligationCode || 'Actividad').trim().replace(/[^a-zA-Z0-9.-]/g, '_');
                 
+                // Incluir el documento oficial "Anexo Descripcion #[codigo].docx"
+                const annexPath = act.annexDocPath || act.annexDriveId;
+                if (annexPath) {
+                    await addFileToZip(annexPath, `${actFolderCode}/Anexo Descripcion ${actFolderCode}.docx`);
+                }
+
                 if (act.evidences && act.evidences.length > 0) {
                     for (let index = 0; index < act.evidences.length; index++) {
                         const evidence = act.evidences[index];
@@ -96,7 +102,7 @@ exports.createBillingZip = async (billingPeriod, contract, user) => {
                                 destFileName = `${actFolderCode}/Foto_${index + 1}${ext}`;
                             } else {
                                 const countSuffix = act.evidences.length > 1 ? `_${index + 1}` : '';
-                                destFileName = `${actFolderCode}/Anexo_${actFolderCode}${countSuffix}${ext}`;
+                                destFileName = `${actFolderCode}/Soporte_${actFolderCode}${countSuffix}${ext}`;
                             }
                             await addFileToZip(evPath, destFileName);
                         }

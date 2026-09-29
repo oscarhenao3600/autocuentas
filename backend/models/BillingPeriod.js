@@ -36,6 +36,18 @@ const billingPeriodSchema = new mongoose.Schema({
             type: String,
             default: ""
         },
+        annexDescription: {
+            type: String,
+            default: ""
+        },
+        annexDocPath: {
+            type: String,
+            default: ""
+        },
+        annexDriveId: {
+            type: String,
+            default: ""
+        },
         evidences: [{
             filename: String,
             path: String,
@@ -103,6 +115,10 @@ const billingPeriodSchema = new mongoose.Schema({
         default: ""
     },
     zipPath: {
+        type: String,
+        default: ""
+    },
+    zipDriveId: {
         type: String,
         default: ""
     },

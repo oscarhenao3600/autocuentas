@@ -6,6 +6,7 @@ const {
     saveBillingPeriod,
     generatePackage,
     downloadPackage,
+    downloadAnnexDocument,
     getTelegramCode,
     uploadPlanillaSocial,
     unlockPlanillaSocial,
@@ -44,6 +45,9 @@ router.post('/:id/generate', protect, generatePackage);
 
 // Download the generated ZIP
 router.get('/:id/download',  protect, downloadPackage);
+
+// Download specific obligation Anexo Descripcion document
+router.get('/:id/annex/:code', protect, downloadAnnexDocument);
 
 // Generate Telegram linking code
 router.get('/telegram/code', protect, getTelegramCode);

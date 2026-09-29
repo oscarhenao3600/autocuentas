@@ -611,3 +611,94 @@ exports.improveEvidenceText = async (arg1, arg2, arg3) => {
         return rawText;
     }
 };
+
+/**
+ * Generates an extended technical description (100 to 150 words, or 200-260 for multi-page)
+ * for the official "Anexo Descripcion #[codigo]" evidence document of an obligation.
+ * Uses the obligation text, contractor's summary, individual evidence captions, and document titles as context.
+ */
+exports.generateObligationAnnexDescription = async ({
+    obligationCode = '',
+    obligationText = '',
+    contractorComment = '',
+    evidences = [],
+    imageCount = 1
+}) => {
+    // Dynamic word target based on number of images / expected page count
+    let minWords = 100;
+    let maxWords = 150;
+    if (imageCount > 3 && imageCount <= 6) {
+        minWords = 200;
+        maxWords = 260;
+    } else if (imageCount > 6) {
+        minWords = 300;
+        maxWords = 380;
+    }
+
+    try {
+        const evidenceDetails = (evidences || []).map((ev, idx) => {
+            const name = ev.filename || `Soporte ${idx + 1}`;
+            const desc = (ev.description || '').trim();
+            return `  - Elemento ${idx + 1} (${name}): ${desc ? desc : 'Sin descripción individual'}`;
+        }).join('\n');
+
+        const prompt = `
+Eres un redactor experto de informes de supervisión y cuentas de cobro para contratos estatales en Colombia.
+Tu tarea es redactar la DESCRIPCIÓN TÉCNICA DETALLADA para el formato oficial de evidencias ("Anexo Descripción") correspondiente a la siguiente obligación contractual.
+
+DATOS DE LA OBLIGACIÓN:
+- Código de la obligación: ${obligationCode || '2.2'}
+- Texto de la obligación: ${obligationText}
+
+CONTEXTO APORTADO POR EL CONTRATISTA:
+- Resumen / Actividades ejecutadas: ${contractorComment || 'Se desarrollaron las actividades programadas a entera satisfacción.'}
+- Evidencias y soportes adjuntos:
+${evidenceDetails || '  - Registro de soportes de ejecución y cumplimiento'}
+
+REGLAS ESTRICTAS DE REDACCIÓN:
+1. LONGITUD OBLIGATORIA: EXACTAMENTE entre ${minWords} y ${maxWords} palabras. No debes generar menos de ${minWords} palabras ni más de ${maxWords} palabras.
+2. ESTILO Y TONO: Redacta en estilo técnico, formal, institucional y descriptivo de la labor ejecutada, en tercera persona o voz pasiva (ejemplos: "En cumplimiento de la obligación...", "Se procedió a realizar...", "Se llevaron a cabo labores de...", "Se verificó la funcionalidad de...").
+3. COHERENCIA TÉCNICA: Integra con naturalidad la información del resumen del contratista y los soportes reportados, justificando cómo cada labor contribuyó al cabal cumplimiento de la obligación contractual.
+4. ESTRUCTURA: Redacta en texto corrido, organizado en 1 o 2 párrafos bien redactados.
+5. FORMATO FINAL: Entrega ÚNICAMENTE el texto redactado en texto plano, sin comillas, sin viñetas, sin títulos, sin asteriscos (sin markdown) y sin mensajes introductorios (como "A continuación presento..." o "Aquí está...").
+`;
+
+        const result = await generateAIContent(prompt);
+        const response = await result.response;
+        let generatedText = response.text().trim().replace(/^["']|["']$/g, '');
+
+        let words = generatedText.split(/\s+/).filter(Boolean);
+        if (words.length > maxWords + 10) {
+            let trimmed = words.slice(0, maxWords).join(' ');
+            trimmed = trimmed.replace(/[,;:]$/, '');
+            if (!/[.!?]$/.test(trimmed)) trimmed += '.';
+            generatedText = trimmed;
+        }
+
+        return generatedText;
+    } catch (error) {
+        console.warn("Aviso: No se pudo generar la descripción extendida con IA, usando generador técnico de respaldo:", error.message);
+        
+        // Fallback: structured professional description synthesizing contractor's inputs
+        const parts = [];
+        const codePrefix = obligationCode ? `En desarrollo y estricto cumplimiento de la obligación ${obligationCode}, ` : 'En desarrollo de las obligaciones contractuales pactadas, ';
+        parts.push(`${codePrefix}se ejecutaron a cabalidad las actividades orientadas a ${obligationText.toLowerCase().replace(/^realizar\s+|^ejecutar\s+|^apoyar\s+/, '')}.`);
+        
+        if (contractorComment && contractorComment.trim()) {
+            parts.push(`Durante el periodo objeto de cobro, el contratista adelantó las siguientes labores técnicas: ${contractorComment.trim()}.`);
+        }
+
+        const customCaptions = (evidences || [])
+            .map(e => (e.description || '').trim())
+            .filter(d => d.length > 5 && (!contractorComment || !contractorComment.includes(d)));
+
+        if (customCaptions.length > 0) {
+            parts.push(`Asimismo, se constata la realización específica de: ${customCaptions.join('; ')}.`);
+        }
+
+        parts.push(`Dichas actuaciones permitieron garantizar la continuidad del servicio, la optimización operativa y el cumplimiento de los estándares de calidad y oportunidad exigidos por la supervisión del contrato.`);
+
+        return parts.join(' ');
+    }
+};
+
