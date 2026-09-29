@@ -6,6 +6,7 @@ const User            = require('../models/User');
 const { generateDocument } = require('../services/document.service');
 const { createBillingZip } = require('../services/archive.service');
 const { extractSecuritySocialData, improveEvidenceText } = require('../services/gemini.service');
+const storageService = require('../services/storage.service');
 
 // ──────────────────────────────────────────────────────────────
 // Helper: Calculate IBC (Ingreso Base de Cotización)
@@ -155,25 +156,42 @@ exports.saveBillingPeriod = async (req, res) => {
             try { parsedActivities = JSON.parse(activities); } catch (_) { parsedActivities = []; }
         }
 
+        // Resolve user and contract for Drive folder naming
+        const contractId = req.body.contractId;
+        const user = await User.findById(req.user._id);
+        const contract = contractId ? await Contract.findById(contractId) : await Contract.findOne({ user: req.user._id }).sort({ createdAt: -1 });
+        const contractorFolder = `${contract?.idNumber || user?.cedula || req.user._id}_${(contract?.contractorName || user?.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_')}`;
+        const targetAct = parseInt(actNumber) || 1;
+
         // Handle uploaded evidences grouped by activity index
-        // Multer stores them as req.files['evidence_0'], req.files['evidence_1'], etc.
+        // Multer holds them in memory as req.files['evidence_0'], req.files['evidence_1'], etc.
         if (req.files) {
-            Object.keys(req.files).forEach(fieldKey => {
+            for (const fieldKey of Object.keys(req.files)) {
                 const match = fieldKey.match(/^evidence_(\d+)$/);
                 if (match) {
                     const idx = parseInt(match[1], 10);
                     if (parsedActivities[idx]) {
                         if (!parsedActivities[idx].evidences) parsedActivities[idx].evidences = [];
-                        req.files[fieldKey].forEach(f => {
-                            parsedActivities[idx].evidences.push({
-                                filename: f.originalname,
-                                path: f.path,
-                                mimetype: f.mimetype
-                            });
-                        });
+                        for (const f of req.files[fieldKey]) {
+                            const fBuffer = f.buffer || (f.path && fs.existsSync(f.path) ? fs.readFileSync(f.path) : null);
+                            if (fBuffer) {
+                                const uploaded = await storageService.saveFile({
+                                    buffer: fBuffer,
+                                    filename: f.originalname,
+                                    mimetype: f.mimetype,
+                                    pathSegments: ['Contratistas', contractorFolder, `Acta_${targetAct}`, 'Evidencias']
+                                });
+                                parsedActivities[idx].evidences.push({
+                                    filename: f.originalname,
+                                    path: uploaded.path,
+                                    driveId: uploaded.driveId,
+                                    mimetype: f.mimetype
+                                });
+                            }
+                        }
                     }
                 }
-            });
+            }
         }
 
         // Parse securitySocial if JSON string
@@ -185,14 +203,23 @@ exports.saveBillingPeriod = async (req, res) => {
         // Handle security social file path if provided
         let ssPath = req.body.securitySocialPath || '';
         if (req.files && req.files['securitySocialFile'] && req.files['securitySocialFile'][0]) {
-            ssPath = req.files['securitySocialFile'][0].path;
+            const ssFile = req.files['securitySocialFile'][0];
+            const ssBuffer = ssFile.buffer || (ssFile.path && fs.existsSync(ssFile.path) ? fs.readFileSync(ssFile.path) : null);
+            if (ssBuffer) {
+                const uploadedSS = await storageService.saveFile({
+                    buffer: ssBuffer,
+                    filename: ssFile.originalname,
+                    mimetype: ssFile.mimetype,
+                    pathSegments: ['Contratistas', contractorFolder, `Acta_${targetAct}`, 'Planilla']
+                });
+                ssPath = uploadedSS.path;
+            }
         }
 
         // Upsert: one draft per actNumber per contract per user (status pending)
-        const contractId = req.body.contractId;
         const query = {
             user: req.user._id,
-            actNumber: parseInt(actNumber) || 1,
+            actNumber: targetAct,
             status: 'pending'
         };
         if (contractId) query.contract = contractId;
@@ -211,7 +238,7 @@ exports.saveBillingPeriod = async (req, res) => {
             period = await BillingPeriod.create({
                 user:           req.user._id,
                 contract:       contractId || null,
-                actNumber:      parseInt(actNumber) || 1,
+                actNumber:      targetAct,
                 periodFrom,
                 periodTo,
                 activities:     parsedActivities || [],
@@ -226,7 +253,7 @@ exports.saveBillingPeriod = async (req, res) => {
             await Contract.findOneAndUpdate(contractQuery, { securitySocialPath: ssPath });
         }
 
-        res.json({ message: 'Borrador guardado correctamente', data: period });
+        res.json({ message: 'Borrador y evidencias guardados en Google Drive correctamente', data: period });
     } catch (err) {
         console.error('Error saveBillingPeriod:', err);
         res.status(500).json({ message: 'Error al guardar el periodo', error: err.message });
@@ -554,21 +581,11 @@ const generateBillingPackage = async (periodId, userId) => {
             }))
         };
 
-        // Helper to resolve physical evidence paths
-        const resolveSafeEvidencePath = (filePath) => {
-            if (!filePath) return null;
-            if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
-            if (fs.existsSync(filePath)) return path.resolve(filePath);
-            const fromBackend = path.resolve(__dirname, '..', filePath);
-            if (fs.existsSync(fromBackend)) return fromBackend;
-            const normalized = filePath.replace(/\\/g, '/');
-            const fromBackendNorm = path.resolve(__dirname, '..', normalized);
-            if (fs.existsSync(fromBackendNorm)) return fromBackendNorm;
-            return null;
-        };
-
         const fotos_evidencias = [];
-        const lista_actividades = (period.activities || []).map((act, i) => {
+        const lista_actividades = [];
+
+        for (let i = 0; i < (period.activities || []).length; i++) {
+            const act = period.activities[i];
             const code = act.obligationCode || `2.2.${i + 1}`;
             const text = act.obligationText || '';
             const comment = (act.comment && act.comment.trim().length > 0)
@@ -582,11 +599,11 @@ const generateBillingPackage = async (periodId, userId) => {
                 const photos = act.evidences.filter(isImageEvidence);
                 let photoIndex = 0;
 
-                act.evidences.forEach((ev) => {
-                    if (isImageEvidence(ev) && ev.path) {
+                for (const ev of act.evidences) {
+                    if (isImageEvidence(ev) && (ev.path || ev.driveId)) {
                         photoIndex++;
-                        const resolved = resolveSafeEvidencePath(ev.path);
-                        if (resolved && fs.existsSync(resolved)) {
+                        const photoBuffer = await storageService.getFileBuffer(ev.path || ev.driveId);
+                        if (photoBuffer) {
                             const totalPhotos = photos.length;
                             const titleSuffix = totalPhotos > 1 ? ` (Evidencia ${photoIndex} de ${totalPhotos})` : '';
                             const desc = (ev.description && ev.description.trim().length > 0)
@@ -597,13 +614,13 @@ const generateBillingPackage = async (periodId, userId) => {
 
                             fotos.push({
                                 descripcion: desc,
-                                foto: resolved
+                                foto: photoBuffer
                             });
 
                             fotos_evidencias.push({
                                 codigo: `${code}${titleSuffix}`,
                                 descripcion: desc,
-                                foto: resolved
+                                foto: photoBuffer
                             });
                         }
                     } else if (ev.filename || ev.path) {
@@ -611,10 +628,10 @@ const generateBillingPackage = async (periodId, userId) => {
                             nombre: ev.filename || path.basename(ev.path || 'Documento adjunto')
                         });
                     }
-                });
+                }
             }
 
-            return {
+            lista_actividades.push({
                 num: (i + 1).toString(),
                 codigo: code,
                 texto: text,
@@ -623,8 +640,8 @@ const generateBillingPackage = async (periodId, userId) => {
                 tiene_fotos: fotos.length > 0,
                 documentos,
                 tiene_documentos: documentos.length > 0
-            };
-        });
+            });
+        }
 
         if (lista_actividades.length === 0) {
             lista_actividades.push({
@@ -701,7 +718,10 @@ exports.downloadPackage = async (req, res) => {
     try {
         const period = await BillingPeriod.findOne({ _id: req.params.id, user: req.user._id });
         if (!period) return res.status(404).json({ message: 'Periodo no encontrado' });
-        if (!period.zipPath || !fs.existsSync(period.zipPath)) {
+
+        const zipTarget = period.zipPath || period.zipDriveId;
+        const zipBuffer = await storageService.getFileBuffer(zipTarget);
+        if (!zipBuffer) {
             return res.status(404).json({ message: 'El paquete ZIP aún no ha sido generado. Por favor ejecute /generate primero.' });
         }
 
@@ -710,10 +730,10 @@ exports.downloadPackage = async (req, res) => {
         period.zipDownloadedAt = new Date();
         await period.save();
 
-        const fileName = path.basename(period.zipPath);
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        const fileName = path.basename(period.zipPath || `Cuenta_Cobro_Acta_${period.actNumber}.zip`);
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
         res.setHeader('Content-Type', 'application/zip');
-        fs.createReadStream(period.zipPath).pipe(res);
+        res.send(zipBuffer);
     } catch (err) {
         res.status(500).json({ message: 'Error al descargar el paquete', error: err.message });
     }
@@ -753,6 +773,18 @@ exports.uploadPlanillaSocial = async (req, res) => {
             contract = await Contract.findOne({ user: req.user._id }).sort({ createdAt: -1 });
         }
 
+        const user = await User.findById(req.user._id);
+        const contractorFolder = `${contract?.idNumber || user?.cedula || req.user._id}_${(contract?.contractorName || user?.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_')}`;
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        // Upload to Drive
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', contractorFolder, 'Planillas_Seguridad_Social']
+        });
+
         // Gather candidate passwords: cédula from contract
         const candidates = [];
         if (contract && contract.idNumber) {
@@ -765,24 +797,37 @@ exports.uploadPlanillaSocial = async (req, res) => {
 
         try {
             console.log("Procesando planilla de seguridad social con IA...");
-            const extracted = await extractSecuritySocialData(req.file.path, {
+            const extracted = await extractSecuritySocialData(fileBuffer, {
+                filename: req.file.originalname,
+                mimetype: req.file.mimetype,
                 password: req.body.password,
                 candidatePasswords: candidates
             });
             console.log("Datos de planilla extraídos:", extracted);
 
+            let finalPath = uploaded.path;
+            if (extracted?.cleanBuffer) {
+                const cleanUploaded = await storageService.saveFile({
+                    buffer: extracted.cleanBuffer,
+                    filename: `Planilla_Social_Limpia_${Date.now()}.pdf`,
+                    mimetype: 'application/pdf',
+                    pathSegments: ['Contratistas', contractorFolder, 'Planillas_Seguridad_Social']
+                });
+                finalPath = cleanUploaded.path;
+            }
+
             // Save filePath to user's contract if available
             if (contract) {
-                contract.securitySocialPath = req.file.path;
+                contract.securitySocialPath = finalPath;
                 await contract.save();
             } else if (req.user && req.user._id) {
                 await Contract.findOneAndUpdate(
                     { user: req.user._id },
-                    { securitySocialPath: req.file.path }
+                    { securitySocialPath: finalPath }
                 );
             }
 
-            let message = 'Planilla procesada con éxito por la IA';
+            let message = 'Planilla procesada y respaldada en Google Drive con éxito';
             if (extracted.unlockedWithCedula) {
                 message = 'Planilla de seguridad social desbloqueada automáticamente con tu cédula y procesada por la IA con éxito';
             } else if (extracted.unlockedWithPassword) {
@@ -792,19 +837,19 @@ exports.uploadPlanillaSocial = async (req, res) => {
             return res.json({
                 message,
                 data: extracted,
-                filePath: req.file.path,
+                filePath: finalPath,
                 unlockedWithCedula: extracted.unlockedWithCedula,
                 unlockedWithPassword: extracted.unlockedWithPassword
             });
         } catch (err) {
             if (err.code === 'PASSWORD_REQUIRED') {
                 if (contract) {
-                    contract.securitySocialPath = req.file.path;
+                    contract.securitySocialPath = uploaded.path;
                     await contract.save();
                 } else if (req.user && req.user._id) {
                     await Contract.findOneAndUpdate(
                         { user: req.user._id },
-                        { securitySocialPath: req.file.path }
+                        { securitySocialPath: uploaded.path }
                     );
                 }
 
@@ -817,7 +862,7 @@ exports.uploadPlanillaSocial = async (req, res) => {
                         : (candidates.length > 0
                             ? "La planilla de seguridad social está protegida con contraseña. Intentamos abrirla automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarla con la IA."
                             : "La planilla de seguridad social está protegida con contraseña. Por favor ingresa la contraseña para procesarla con la IA."),
-                    filePath: req.file.path
+                    filePath: uploaded.path
                 });
             }
             throw err;
@@ -850,19 +895,33 @@ exports.unlockPlanillaSocial = async (req, res) => {
             targetPath = contract.securitySocialPath;
         }
 
-        if (!targetPath || !fs.existsSync(targetPath)) {
-            return res.status(404).json({ message: 'El archivo de la planilla no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        const fileBuffer = await storageService.getFileBuffer(targetPath);
+        if (!fileBuffer) {
+            return res.status(404).json({ message: 'El archivo de la planilla no fue encontrado. Por favor vuelve a subirlo.' });
         }
 
         try {
             console.log("Intentando desbloquear planilla de seguridad social con contraseña ingresada...");
-            const extracted = await extractSecuritySocialData(targetPath, {
+            const extracted = await extractSecuritySocialData(fileBuffer, {
                 password: password.trim(),
                 candidatePasswords: []
             });
 
+            let finalPath = targetPath;
+            if (extracted?.cleanBuffer) {
+                const user = await User.findById(req.user._id);
+                const contractorFolder = `${contract?.idNumber || user?.cedula || req.user._id}_${(contract?.contractorName || user?.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_')}`;
+                const cleanUploaded = await storageService.saveFile({
+                    buffer: extracted.cleanBuffer,
+                    filename: `Planilla_Social_Limpia_${Date.now()}.pdf`,
+                    mimetype: 'application/pdf',
+                    pathSegments: ['Contratistas', contractorFolder, 'Planillas_Seguridad_Social']
+                });
+                finalPath = cleanUploaded.path;
+            }
+
             if (contract) {
-                contract.securitySocialPath = targetPath;
+                contract.securitySocialPath = finalPath;
                 await contract.save();
             }
 
@@ -870,7 +929,7 @@ exports.unlockPlanillaSocial = async (req, res) => {
                 success: true,
                 message: '¡Planilla de seguridad social desbloqueada y procesada por IA con éxito!',
                 data: extracted,
-                filePath: targetPath
+                filePath: finalPath
             });
         } catch (err) {
             if (err.code === 'PASSWORD_REQUIRED') {

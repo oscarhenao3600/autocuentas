@@ -1,6 +1,16 @@
 const fs = require('fs');
+const path = require('path');
 const Contract = require('../models/Contract');
-const { extractContractData, extractRpData, extractBankCertificateData, extractActaInicioData, extractRutData, extractSecuritySocialData } = require('../services/gemini.service');
+const User = require('../models/User');
+const storageService = require('../services/storage.service');
+const { 
+    extractContractData, 
+    extractRpData, 
+    extractBankCertificateData, 
+    extractActaInicioData, 
+    extractRutData, 
+    extractSecuritySocialData 
+} = require('../services/gemini.service');
 const { filterSpecificObligations } = require('../utils/period.utils');
 const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
@@ -10,6 +20,12 @@ const resolveContract = async (userId, contractId = null) => {
         if (c) return c;
     }
     return await Contract.findOne({ user: userId }).sort({ createdAt: -1 });
+};
+
+const getContractorFolder = (contract, user) => {
+    const id = contract?.idNumber || user?.cedula || user?._id || 'Contratista';
+    const name = (contract?.contractorName || user?.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_');
+    return `${id}_${name}`;
 };
 
 exports.listMyContracts = async (req, res) => {
@@ -27,8 +43,23 @@ exports.uploadBaseContract = async (req, res) => {
             return res.status(400).json({ message: 'Por favor suba el documento del contrato' });
         }
 
-        // 1. Extract data with Gemini
-        const extractedData = await extractContractData(req.file.path);
+        const user = await User.findById(req.user._id);
+        const contractorFolder = getContractorFolder(null, user);
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        // 1. Upload to Google Drive directly
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', contractorFolder, 'Contratos_Base']
+        });
+
+        // 2. Extract data with Gemini using the in-memory buffer
+        const extractedData = await extractContractData(fileBuffer, {
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype
+        });
 
         // Filter out general obligations if any were extracted
         if (extractedData.activities && Array.isArray(extractedData.activities)) {
@@ -42,7 +73,6 @@ exports.uploadBaseContract = async (req, res) => {
         if (contractId) {
             contract = await Contract.findOne({ _id: contractId, user: req.user._id });
         } else if (!isNewContract) {
-            // Check if contract with same number already exists for user
             if (extractedData.contractNumber) {
                 contract = await Contract.findOne({ user: req.user._id, contractNumber: extractedData.contractNumber });
             }
@@ -55,22 +85,23 @@ exports.uploadBaseContract = async (req, res) => {
         }
 
         if (contract) {
-            Object.assign(contract, extractedData, { baseDocumentPath: req.file.path });
+            Object.assign(contract, extractedData, { baseDocumentPath: uploaded.path });
             if (extractedData.entityName) contract.entityName = extractedData.entityName;
             await contract.save();
         } else {
             contract = await Contract.create({
                 user: req.user._id,
                 ...extractedData,
-                baseDocumentPath: req.file.path
+                baseDocumentPath: uploaded.path
             });
         }
 
         res.json({
-            message: 'Contrato procesado con éxito por la IA',
+            message: 'Contrato procesado y respaldado en Google Drive con éxito',
             data: contract
         });
     } catch (error) {
+        console.error('Error uploadBaseContract:', error);
         res.status(500).json({ message: 'Error al procesar el contrato', error: error.message });
     }
 };
@@ -94,6 +125,8 @@ exports.uploadAttachments = async (req, res) => {
             return res.status(404).json({ message: 'Primero debe configurar su contrato base' });
         }
 
+        const user = await User.findById(req.user._id);
+        const contractorFolder = getContractorFolder(contract, user);
         const updates = {};
         let bankExtracted = null;
         let rutExtracted = null;
@@ -112,15 +145,34 @@ exports.uploadAttachments = async (req, res) => {
 
         if (req.files.securitySocial) {
             const file = req.files.securitySocial[0];
-            updates.securitySocialPath = file.path;
+            const fileBuffer = file.buffer || (file.path && fs.existsSync(file.path) ? fs.readFileSync(file.path) : null);
+
+            const uploaded = await storageService.saveFile({
+                buffer: fileBuffer,
+                filename: file.originalname,
+                mimetype: file.mimetype,
+                pathSegments: ['Contratistas', contractorFolder, 'Anexos']
+            });
+            updates.securitySocialPath = uploaded.path;
 
             try {
                 console.log("Procesando Planilla de Seguridad Social con IA...");
-                securitySocialExtracted = await extractSecuritySocialData(file.path, {
+                securitySocialExtracted = await extractSecuritySocialData(fileBuffer, {
+                    filename: file.originalname,
+                    mimetype: file.mimetype,
                     password: req.body.securitySocialPassword,
                     candidatePasswords: candidates
                 });
-                console.log("Datos de seguridad social extraídos:", securitySocialExtracted);
+
+                if (securitySocialExtracted?.cleanBuffer) {
+                    const cleanUploaded = await storageService.saveFile({
+                        buffer: securitySocialExtracted.cleanBuffer,
+                        filename: `Seguridad_Social_Limpia_${Date.now()}.pdf`,
+                        mimetype: 'application/pdf',
+                        pathSegments: ['Contratistas', contractorFolder, 'Anexos']
+                    });
+                    updates.securitySocialPath = cleanUploaded.path;
+                }
             } catch (err) {
                 if (err.code === 'PASSWORD_REQUIRED') {
                     Object.assign(contract, updates);
@@ -144,22 +196,41 @@ exports.uploadAttachments = async (req, res) => {
 
         if (req.files.rut) {
             const file = req.files.rut[0];
-            updates.rutPath = file.path;
+            const fileBuffer = file.buffer || (file.path && fs.existsSync(file.path) ? fs.readFileSync(file.path) : null);
+
+            const uploaded = await storageService.saveFile({
+                buffer: fileBuffer,
+                filename: file.originalname,
+                mimetype: file.mimetype,
+                pathSegments: ['Contratistas', contractorFolder, 'Anexos']
+            });
+            updates.rutPath = uploaded.path;
 
             try {
                 console.log("Procesando RUT con IA...");
-                rutExtracted = await extractRutData(file.path, {
+                rutExtracted = await extractRutData(fileBuffer, {
+                    filename: file.originalname,
+                    mimetype: file.mimetype,
                     password: req.body.rutPassword,
                     candidatePasswords: candidates
                 });
 
                 if (rutExtracted) {
+                    if (rutExtracted.cleanBuffer) {
+                        const cleanUploaded = await storageService.saveFile({
+                            buffer: rutExtracted.cleanBuffer,
+                            filename: `RUT_Limpio_${Date.now()}.pdf`,
+                            mimetype: 'application/pdf',
+                            pathSegments: ['Contratistas', contractorFolder, 'Anexos']
+                        });
+                        updates.rutPath = cleanUploaded.path;
+                    }
+
                     if (rutExtracted.contractorAddress) updates.contractorAddress = rutExtracted.contractorAddress;
                     if (rutExtracted.idCity) updates.idCity = rutExtracted.idCity;
                     if (typeof rutExtracted.isTaxFiler === 'boolean') updates.isTaxFiler = rutExtracted.isTaxFiler;
                     if (rutExtracted.contractorPhone && !contract.contractorPhone) updates.contractorPhone = rutExtracted.contractorPhone;
                     if (rutExtracted.contractorEmail && !contract.contractorEmail) updates.contractorEmail = rutExtracted.contractorEmail;
-                    console.log("Datos del RUT extraídos:", rutExtracted);
                 }
             } catch (err) {
                 if (err.code === 'PASSWORD_REQUIRED') {
@@ -184,24 +255,42 @@ exports.uploadAttachments = async (req, res) => {
 
         if (req.files.bankCertificate) {
             const file = req.files.bankCertificate[0];
-            updates.bankCertificatePath = file.path;
+            const fileBuffer = file.buffer || (file.path && fs.existsSync(file.path) ? fs.readFileSync(file.path) : null);
+
+            const uploaded = await storageService.saveFile({
+                buffer: fileBuffer,
+                filename: file.originalname,
+                mimetype: file.mimetype,
+                pathSegments: ['Contratistas', contractorFolder, 'Anexos']
+            });
+            updates.bankCertificatePath = uploaded.path;
 
             try {
                 console.log("Procesando Certificado Bancario con IA...");
-                bankExtracted = await extractBankCertificateData(file.path, {
+                bankExtracted = await extractBankCertificateData(fileBuffer, {
+                    filename: file.originalname,
+                    mimetype: file.mimetype,
                     password: req.body.bankCertificatePassword,
                     candidatePasswords: candidates
                 });
 
                 if (bankExtracted) {
+                    if (bankExtracted.cleanBuffer) {
+                        const cleanUploaded = await storageService.saveFile({
+                            buffer: bankExtracted.cleanBuffer,
+                            filename: `Certificado_Bancario_Limpio_${Date.now()}.pdf`,
+                            mimetype: 'application/pdf',
+                            pathSegments: ['Contratistas', contractorFolder, 'Anexos']
+                        });
+                        updates.bankCertificatePath = cleanUploaded.path;
+                    }
+
                     if (bankExtracted.bankName) updates.bankName = bankExtracted.bankName;
                     if (bankExtracted.accountNumber) updates.accountNumber = bankExtracted.accountNumber;
                     if (bankExtracted.paymentMethod) updates.paymentMethod = bankExtracted.paymentMethod;
-                    console.log("Datos bancarios extraídos:", bankExtracted);
                 }
             } catch (err) {
                 if (err.code === 'PASSWORD_REQUIRED') {
-                    // Save uploaded attachment path so user can unlock it without re-uploading
                     Object.assign(contract, updates);
                     await contract.save();
 
@@ -210,9 +299,9 @@ exports.uploadAttachments = async (req, res) => {
                         docType: 'bankCertificate',
                         invalidPassword: Boolean(req.body.bankCertificatePassword),
                         message: req.body.bankCertificatePassword
-                            ? "La contraseña ingresada es incorrecta para este documento."
+                            ? "La contraseña ingresada es incorrecta para el certificado bancario."
                             : (candidates.length > 0
-                                ? "El certificado bancario está protegido con contraseña. Intentamos abrirlo automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarlo con la IA."
+                                ? "El certificado bancario está protegido con contraseña. Intentamos abrirla automáticamente con tu número de cédula pero no coincidió. Por favor ingresa la contraseña para procesarlo con la IA."
                                 : "El certificado bancario está protegido con contraseña. Por favor ingresa la contraseña para procesarlo con la IA."),
                         data: contract
                     });
@@ -224,39 +313,17 @@ exports.uploadAttachments = async (req, res) => {
         Object.assign(contract, updates);
         await contract.save();
 
-        let message = 'Anexos actualizados con éxito';
-        if (securitySocialExtracted) {
-            if (securitySocialExtracted.unlockedWithCedula) {
-                message = 'Anexos actualizados y planilla de seguridad social desbloqueada automáticamente con tu cédula y procesada por la IA con éxito';
-            } else if (securitySocialExtracted.unlockedWithPassword) {
-                message = 'Anexos actualizados y planilla de seguridad social desbloqueada con la contraseña ingresada y procesada por la IA con éxito';
-            } else {
-                message = 'Anexos actualizados y planilla de seguridad social procesada por la IA con éxito';
-            }
-        } else if (bankExtracted) {
-            if (bankExtracted.unlockedWithCedula) {
-                message = 'Anexos actualizados y certificado bancario desbloqueado automáticamente con tu cédula y procesado por la IA con éxito';
-            } else if (bankExtracted.unlockedWithPassword) {
-                message = 'Anexos actualizados y certificado bancario desbloqueado con la contraseña ingresada y procesado por la IA con éxito';
-            } else {
-                message = 'Anexos actualizados y certificado bancario procesado por la IA con éxito';
-            }
-        } else if (rutExtracted) {
-            if (rutExtracted.unlockedWithCedula) {
-                message = 'Anexos actualizados y RUT desbloqueado automáticamente con tu cédula y procesado por la IA con éxito';
-            } else if (rutExtracted.unlockedWithPassword) {
-                message = 'Anexos actualizados y RUT desbloqueado con la contraseña ingresada y procesado por la IA con éxito';
-            } else {
-                message = 'Anexos actualizados y RUT procesado por la IA con éxito';
-            }
-        }
-
         res.json({
-            message,
+            message: 'Documentos anexos procesados y guardados en Google Drive con éxito',
             data: contract,
-            extracted: securitySocialExtracted || bankExtracted || rutExtracted
+            extracted: {
+                bank: bankExtracted,
+                rut: rutExtracted,
+                securitySocial: securitySocialExtracted
+            }
         });
     } catch (error) {
+        console.error('Error uploadAttachments:', error);
         res.status(500).json({ message: 'Error al subir anexos', error: error.message });
     }
 };
@@ -273,24 +340,35 @@ exports.unlockSecuritySocial = async (req, res) => {
             return res.status(404).json({ message: 'No hay una planilla de seguridad social cargada previamente' });
         }
 
-        if (!fs.existsSync(contract.securitySocialPath)) {
-            return res.status(404).json({ message: 'El archivo de la planilla de seguridad social no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        const fileBuffer = await storageService.getFileBuffer(contract.securitySocialPath);
+        if (!fileBuffer) {
+            return res.status(404).json({ message: 'El archivo de la planilla no fue encontrado. Por favor vuelve a subirlo.' });
         }
 
         try {
-            console.log("Intentando desbloquear planilla de seguridad social con contraseña ingresada...");
-            const securitySocialExtracted = await extractSecuritySocialData(contract.securitySocialPath, {
+            const ssExtracted = await extractSecuritySocialData(fileBuffer, {
                 password: password.trim(),
                 candidatePasswords: []
             });
 
-            await contract.save();
+            if (ssExtracted?.cleanBuffer) {
+                const user = await User.findById(req.user._id);
+                const folder = getContractorFolder(contract, user);
+                const cleanUploaded = await storageService.saveFile({
+                    buffer: ssExtracted.cleanBuffer,
+                    filename: `Seguridad_Social_Limpia_${Date.now()}.pdf`,
+                    mimetype: 'application/pdf',
+                    pathSegments: ['Contratistas', folder, 'Anexos']
+                });
+                contract.securitySocialPath = cleanUploaded.path;
+                await contract.save();
+            }
 
             return res.json({
                 success: true,
                 message: '¡Planilla de seguridad social desbloqueada y procesada por IA con éxito!',
                 data: contract,
-                extracted: securitySocialExtracted
+                extracted: ssExtracted
             });
         } catch (err) {
             if (err.code === 'PASSWORD_REQUIRED') {
@@ -322,18 +400,31 @@ exports.unlockBankCertificate = async (req, res) => {
             return res.status(404).json({ message: 'No hay un certificado bancario cargado previamente' });
         }
 
-        if (!fs.existsSync(contract.bankCertificatePath)) {
-            return res.status(404).json({ message: 'El archivo del certificado bancario no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        const fileBuffer = await storageService.getFileBuffer(contract.bankCertificatePath);
+        if (!fileBuffer) {
+            return res.status(404).json({ message: 'El archivo del certificado bancario no fue encontrado. Por favor vuelve a subirlo.' });
         }
 
         try {
             console.log("Intentando desbloquear certificado bancario con contraseña ingresada...");
-            const bankExtracted = await extractBankCertificateData(contract.bankCertificatePath, {
+            const bankExtracted = await extractBankCertificateData(fileBuffer, {
                 password: password.trim(),
                 candidatePasswords: []
             });
 
             if (bankExtracted) {
+                if (bankExtracted.cleanBuffer) {
+                    const user = await User.findById(req.user._id);
+                    const folder = getContractorFolder(contract, user);
+                    const cleanUploaded = await storageService.saveFile({
+                        buffer: bankExtracted.cleanBuffer,
+                        filename: `Certificado_Bancario_Limpio_${Date.now()}.pdf`,
+                        mimetype: 'application/pdf',
+                        pathSegments: ['Contratistas', folder, 'Anexos']
+                    });
+                    contract.bankCertificatePath = cleanUploaded.path;
+                }
+
                 if (bankExtracted.bankName) contract.bankName = bankExtracted.bankName;
                 if (bankExtracted.accountNumber) contract.accountNumber = bankExtracted.accountNumber;
                 if (bankExtracted.paymentMethod) contract.paymentMethod = bankExtracted.paymentMethod;
@@ -376,18 +467,31 @@ exports.unlockRut = async (req, res) => {
             return res.status(404).json({ message: 'No hay un RUT cargado previamente' });
         }
 
-        if (!fs.existsSync(contract.rutPath)) {
-            return res.status(404).json({ message: 'El archivo del RUT no fue encontrado en el servidor. Por favor vuelve a subirlo.' });
+        const fileBuffer = await storageService.getFileBuffer(contract.rutPath);
+        if (!fileBuffer) {
+            return res.status(404).json({ message: 'El archivo del RUT no fue encontrado. Por favor vuelve a subirlo.' });
         }
 
         try {
             console.log("Intentando desbloquear RUT con contraseña ingresada...");
-            const rutExtracted = await extractRutData(contract.rutPath, {
+            const rutExtracted = await extractRutData(fileBuffer, {
                 password: password.trim(),
                 candidatePasswords: []
             });
 
             if (rutExtracted) {
+                if (rutExtracted.cleanBuffer) {
+                    const user = await User.findById(req.user._id);
+                    const folder = getContractorFolder(contract, user);
+                    const cleanUploaded = await storageService.saveFile({
+                        buffer: rutExtracted.cleanBuffer,
+                        filename: `RUT_Limpio_${Date.now()}.pdf`,
+                        mimetype: 'application/pdf',
+                        pathSegments: ['Contratistas', folder, 'Anexos']
+                    });
+                    contract.rutPath = cleanUploaded.path;
+                }
+
                 if (rutExtracted.contractorAddress) contract.contractorAddress = rutExtracted.contractorAddress;
                 if (rutExtracted.idCity) contract.idCity = rutExtracted.idCity;
                 if (typeof rutExtracted.isTaxFiler === 'boolean') contract.isTaxFiler = rutExtracted.isTaxFiler;
@@ -459,23 +563,35 @@ exports.updateContract = async (req, res) => {
     }
 };
 
-// ──────────────────────────────────────────────────────────────
-// POST /api/contracts/upload-rp  →  Process Registro Presupuestal with Gemini
-// ──────────────────────────────────────────────────────────────
 exports.uploadRp = async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ message: 'Por favor suba el documento del Registro Presupuestal (RP)' });
         }
 
-        // Extract RP data with Gemini AI
-        const rpData = await extractRpData(req.file.path);
-
         const contractId = req.body.contractId || req.query.contractId;
         let contract = await resolveContract(req.user._id, contractId);
         if (!contract) {
             return res.status(400).json({ message: 'Primero debe subir el contrato base antes de cargar el RP' });
         }
+
+        const user = await User.findById(req.user._id);
+        const folder = getContractorFolder(contract, user);
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', folder, 'Anexos']
+        });
+        contract.rpPath = uploaded.path;
+
+        // Extract RP data with Gemini AI
+        const rpData = await extractRpData(fileBuffer, {
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype
+        });
 
         if (rpData.rpNumber)  contract.rp    = rpData.rpNumber;
         if (rpData.cdpNumber) contract.cdp   = rpData.cdpNumber;
@@ -485,7 +601,7 @@ exports.uploadRp = async (req, res) => {
         await contract.save();
 
         res.json({
-            message: 'Registro Presupuestal procesado con éxito por la IA',
+            message: 'Registro Presupuestal procesado y respaldado en Google Drive con éxito',
             extracted: rpData,
             data: contract
         });
@@ -495,17 +611,11 @@ exports.uploadRp = async (req, res) => {
     }
 };
 
-// ──────────────────────────────────────────────────────────────
-// POST /api/contracts/upload-addition  →  Process Modificatorio PDF with Gemini
-// ──────────────────────────────────────────────────────────────
 exports.uploadAdditionContract = async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ message: 'Por favor suba el documento modificatorio de la adición' });
         }
-
-        // 1. Extract data with Gemini
-        const extractedData = await extractAdditionContractData(req.file.path);
 
         const contractId = req.body.contractId || req.query.contractId;
         let contract = await resolveContract(req.user._id, contractId);
@@ -514,14 +624,31 @@ exports.uploadAdditionContract = async (req, res) => {
             return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar una adición' });
         }
 
+        const user = await User.findById(req.user._id);
+        const folder = getContractorFolder(contract, user);
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', folder, 'Adiciones']
+        });
+
+        // Extract data with Gemini
+        const extractedData = await extractAdditionContractData(fileBuffer, {
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype
+        });
+
         Object.assign(contract, extractedData, { 
             hasAddition: true,
-            additionDocumentPath: req.file.path 
+            additionDocumentPath: uploaded.path 
         });
         await contract.save();
 
         res.json({
-            message: 'Modificatorio de adición procesado con éxito por la IA',
+            message: 'Modificatorio de adición procesado y respaldado en Google Drive con éxito',
             data: contract
         });
     } catch (error) {
@@ -530,23 +657,35 @@ exports.uploadAdditionContract = async (req, res) => {
     }
 };
 
-// ──────────────────────────────────────────────────────────────
-// POST /api/contracts/upload-addition-rp  →  Process RP de Adición with Gemini
-// ──────────────────────────────────────────────────────────────
 exports.uploadAdditionRp = async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ message: 'Por favor suba el documento del Registro Presupuestal (RP) de la adición' });
         }
 
-        // Extract RP data with Gemini AI
-        const rpData = await extractRpData(req.file.path);
-
         const contractId = req.body.contractId || req.query.contractId;
         let contract = await resolveContract(req.user._id, contractId);
         if (!contract) {
             return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar el RP de adición' });
         }
+
+        const user = await User.findById(req.user._id);
+        const folder = getContractorFolder(contract, user);
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', folder, 'Adiciones']
+        });
+        contract.additionRpPath = uploaded.path;
+
+        // Extract RP data with Gemini AI
+        const rpData = await extractRpData(fileBuffer, {
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype
+        });
 
         if (rpData.rpNumber)  contract.additionRp    = rpData.rpNumber;
         if (rpData.cdpNumber) contract.additionCdp   = rpData.cdpNumber;
@@ -555,7 +694,7 @@ exports.uploadAdditionRp = async (req, res) => {
         await contract.save();
 
         res.json({
-            message: 'Registro Presupuestal de la adición procesado con éxito por la IA',
+            message: 'Registro Presupuestal de la adición procesado y guardado en Google Drive con éxito',
             extracted: rpData,
             data: contract
         });
@@ -565,16 +704,11 @@ exports.uploadAdditionRp = async (req, res) => {
     }
 };
 
-// ──────────────────────────────────────────────────────────────
-// POST /api/contracts/upload-acta-inicio  →  Process Acta de Inicio with Gemini
-// ──────────────────────────────────────────────────────────────
 exports.uploadActaInicio = async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ message: 'Por favor suba el documento del Acta de Inicio' });
         }
-
-        const actaData = await extractActaInicioData(req.file.path);
 
         const contractId = req.body.contractId || req.query.contractId;
         let contract = await resolveContract(req.user._id, contractId);
@@ -582,7 +716,23 @@ exports.uploadActaInicio = async (req, res) => {
             return res.status(400).json({ message: 'Primero debe configurar su contrato base antes de cargar el Acta de Inicio' });
         }
 
-        contract.actaInicioPath = req.file.path;
+        const user = await User.findById(req.user._id);
+        const folder = getContractorFolder(contract, user);
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', folder, 'Anexos']
+        });
+        contract.actaInicioPath = uploaded.path;
+
+        const actaData = await extractActaInicioData(fileBuffer, {
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype
+        });
+
         if (actaData.startDate) contract.startDate = actaData.startDate;
         if (actaData.endDate) contract.endDate = actaData.endDate;
         if (actaData.contractNumber && !contract.contractNumber) contract.contractNumber = actaData.contractNumber;
@@ -593,7 +743,7 @@ exports.uploadActaInicio = async (req, res) => {
         await contract.save();
 
         res.json({
-            message: 'Acta de Inicio procesada con éxito por la IA',
+            message: 'Acta de Inicio procesada y respaldada en Google Drive con éxito',
             extracted: actaData,
             data: contract
         });
@@ -615,6 +765,3 @@ exports.getEvidenceReminderStatus = async (req, res) => {
         res.status(500).json({ message: 'Error al verificar recordatorios', error: error.message });
     }
 };
-
-
-

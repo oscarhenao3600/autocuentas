@@ -1,6 +1,8 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
+const path = require("path");
 const { parsePdfText, unlockPdfWithCandidates } = require("../utils/pdf.utils");
+const storageService = require("./storage.service");
 require("dotenv").config();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -21,13 +23,38 @@ const generateAIContent = async (contents) => {
     throw lastError;
 };
 
-exports.extractContractData = async (filePath) => {
+/**
+ * Resolves an input which can be a Buffer, a Drive ID, a Drive path, or a local file path
+ */
+async function resolveInputBuffer(input, options = {}) {
+    let buffer = null;
+    let filename = options.filename || 'documento.pdf';
+
+    if (Buffer.isBuffer(input)) {
+        buffer = input;
+    } else if (typeof input === 'string') {
+        filename = options.filename || path.basename(input);
+        buffer = await storageService.getFileBuffer(input);
+    }
+
+    if (!buffer) {
+        throw new Error(`No se pudo cargar el archivo para procesamiento con IA: ${input}`);
+    }
+
+    const lower = filename.toLowerCase();
+    const isPdf = lower.endsWith('.pdf') || options.mimetype === 'application/pdf';
+    const isImage = ['.png', '.jpg', '.jpeg', '.webp'].some(ext => lower.endsWith(ext)) || (options.mimetype && options.mimetype.startsWith('image/'));
+
+    return { buffer, filename, isPdf, isImage };
+}
+
+exports.extractContractData = async (filePath, options = {}) => {
     try {
-        const dataBuffer = fs.readFileSync(filePath);
+        const { buffer: dataBuffer, isPdf } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
 
-        if (filePath.endsWith('.pdf')) {
+        if (isPdf) {
             try {
                 text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 150) {
@@ -76,7 +103,7 @@ exports.extractContractData = async (filePath) => {
         `;
 
         let result;
-        if (useMultimodal && filePath.endsWith('.pdf')) {
+        if (useMultimodal && isPdf) {
             console.log("Detectado PDF escaneado (imagen). Usando modo multimodal de Gemini para OCR...");
             const pdfPart = {
                 inlineData: {
@@ -99,13 +126,13 @@ exports.extractContractData = async (filePath) => {
     }
 };
 
-exports.extractRpData = async (filePath) => {
+exports.extractRpData = async (filePath, options = {}) => {
     try {
-        const dataBuffer = fs.readFileSync(filePath);
+        const { buffer: dataBuffer, isPdf } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
 
-        if (filePath.endsWith('.pdf')) {
+        if (isPdf) {
             try {
                 text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 100) {
@@ -131,7 +158,7 @@ exports.extractRpData = async (filePath) => {
         `;
 
         let result;
-        if (useMultimodal && filePath.endsWith('.pdf')) {
+        if (useMultimodal && isPdf) {
             const pdfPart = {
                 inlineData: {
                     data: dataBuffer.toString("base64"),
@@ -153,13 +180,13 @@ exports.extractRpData = async (filePath) => {
     }
 };
 
-exports.extractAdditionContractData = async (filePath) => {
+exports.extractAdditionContractData = async (filePath, options = {}) => {
     try {
-        const dataBuffer = fs.readFileSync(filePath);
+        const { buffer: dataBuffer, isPdf } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
 
-        if (filePath.endsWith('.pdf')) {
+        if (isPdf) {
             try {
                 text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 150) {
@@ -172,8 +199,6 @@ exports.extractAdditionContractData = async (filePath) => {
         } else {
             text = dataBuffer.toString();
         }
-
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
         const prompt = `
             Analiza el siguiente texto de un documento modificatorio (adición y/o prórroga de contrato) y extrae la información relevante en formato JSON puro (sin markdown). 
@@ -191,7 +216,7 @@ exports.extractAdditionContractData = async (filePath) => {
         `;
 
         let result;
-        if (useMultimodal && filePath.endsWith('.pdf')) {
+        if (useMultimodal && isPdf) {
             console.log("Detectado modificatorio escaneado. Usando modo multimodal de Gemini para OCR...");
             const pdfPart = {
                 inlineData: {
@@ -216,26 +241,29 @@ exports.extractAdditionContractData = async (filePath) => {
 
 exports.extractBankCertificateData = async (filePath, options = {}) => {
     try {
-        const dataBuffer = fs.readFileSync(filePath);
+        const { buffer: dataBuffer, filename, isPdf, isImage } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
         let unlockedWithCedula = false;
         let unlockedWithPassword = false;
         let usedPassword = null;
+        let effectiveBuffer = dataBuffer;
 
-        if (filePath.endsWith('.pdf')) {
+        if (isPdf) {
             // Check encryption and unlock with candidate passwords (e.g. user cédula)
             const unlockResult = await unlockPdfWithCandidates(dataBuffer, {
                 password: options.password,
                 candidatePasswords: options.candidatePasswords,
-                targetSavePath: filePath
+                targetSavePath: (typeof filePath === 'string' && fs.existsSync(filePath)) ? filePath : null
             });
 
             text = unlockResult.text;
             usedPassword = unlockResult.usedPassword;
+            if (unlockResult.cleanBuffer) {
+                effectiveBuffer = unlockResult.cleanBuffer;
+            }
             if (unlockResult.unlocked) {
                 unlockedWithPassword = true;
-                // If the used password matches any of the candidate passwords (cédula)
                 if (options.candidatePasswords && options.candidatePasswords.some(c => c && String(c).trim() === String(usedPassword))) {
                     unlockedWithCedula = true;
                 }
@@ -245,7 +273,6 @@ exports.extractBankCertificateData = async (filePath, options = {}) => {
                 useMultimodal = true;
             }
         } else {
-            // It might be an image (jpg/png)
             useMultimodal = true;
         }
 
@@ -260,29 +287,27 @@ exports.extractBankCertificateData = async (filePath, options = {}) => {
         `;
 
         let result;
-        const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
-        if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
+        if ((useMultimodal && isPdf) || isImage) {
             console.log("Procesando certificado bancario escaneado o imagen. Usando modo multimodal de Gemini...");
-            // Re-read buffer in case unlockAndSaveCleanPdf overwrote it with clean unencrypted version
-            const freshBuffer = fs.readFileSync(filePath);
-            const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
+            const ext = filename.split('.').pop().toLowerCase();
+            const mimeType = isImage ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : "application/pdf";
             const filePart = {
                 inlineData: {
-                    data: freshBuffer.toString("base64"),
+                    data: effectiveBuffer.toString("base64"),
                     mimeType: mimeType
                 }
             };
             result = await generateAIContent([prompt, filePart]);
         } else {
-            result = await generateAIContent(`${prompt}\n\nTexto de la certificación bancaria:\n${text.substring(0, 10000)}`);
+            result = await generateAIContent(`${prompt}\n\nTexto de la certificación bancaria:\n${text.substring(0, 15000)}`);
         }
 
         const response = await result.response;
         const jsonText = response.text().replace(/```json|```/g, "").trim();
-        
         const extracted = JSON.parse(jsonText);
         return {
             ...extracted,
+            cleanBuffer: effectiveBuffer !== dataBuffer ? effectiveBuffer : null,
             unlockedWithCedula,
             unlockedWithPassword,
             usedPassword
@@ -292,37 +317,34 @@ exports.extractBankCertificateData = async (filePath, options = {}) => {
             throw error;
         }
         console.error("Error en extractBankCertificateData:", error);
-        if (error.message && (error.message.includes('password') || error.message.includes('Password') || error.message.includes('no pages'))) {
-            const passErr = new Error("El certificado bancario parece tener clave o estar protegido.");
-            passErr.code = "PASSWORD_REQUIRED";
-            throw passErr;
-        }
         throw new Error("No se pudo procesar el certificado bancario con IA");
     }
 };
 
 exports.extractSecuritySocialData = async (filePath, options = {}) => {
     try {
-        const dataBuffer = fs.readFileSync(filePath);
+        const { buffer: dataBuffer, filename, isPdf, isImage } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
         let unlockedWithCedula = false;
         let unlockedWithPassword = false;
         let usedPassword = null;
+        let effectiveBuffer = dataBuffer;
 
-        if (filePath.endsWith('.pdf')) {
-            // Check encryption and unlock with candidate passwords (e.g. user cédula)
+        if (isPdf) {
             const unlockResult = await unlockPdfWithCandidates(dataBuffer, {
                 password: options.password,
                 candidatePasswords: options.candidatePasswords,
-                targetSavePath: filePath
+                targetSavePath: (typeof filePath === 'string' && fs.existsSync(filePath)) ? filePath : null
             });
 
             text = unlockResult.text;
             usedPassword = unlockResult.usedPassword;
+            if (unlockResult.cleanBuffer) {
+                effectiveBuffer = unlockResult.cleanBuffer;
+            }
             if (unlockResult.unlocked) {
                 unlockedWithPassword = true;
-                // If the used password matches any of the candidate passwords (cédula)
                 if (options.candidatePasswords && options.candidatePasswords.some(c => c && String(c).trim() === String(usedPassword))) {
                     unlockedWithCedula = true;
                 }
@@ -350,15 +372,13 @@ exports.extractSecuritySocialData = async (filePath, options = {}) => {
         `;
 
         let result;
-        const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
-        if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
+        if ((useMultimodal && isPdf) || isImage) {
             console.log("Procesando planilla de seguridad social escaneada o imagen. Usando modo multimodal de Gemini...");
-            // Re-read buffer in case unlockAndSaveCleanPdf overwrote it with clean unencrypted version
-            const freshBuffer = fs.readFileSync(filePath);
-            const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
+            const ext = filename.split('.').pop().toLowerCase();
+            const mimeType = isImage ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : "application/pdf";
             const filePart = {
                 inlineData: {
-                    data: freshBuffer.toString("base64"),
+                    data: effectiveBuffer.toString("base64"),
                     mimeType: mimeType
                 }
             };
@@ -373,6 +393,7 @@ exports.extractSecuritySocialData = async (filePath, options = {}) => {
         const extracted = JSON.parse(jsonText);
         return {
             ...extracted,
+            cleanBuffer: effectiveBuffer !== dataBuffer ? effectiveBuffer : null,
             unlockedWithCedula,
             unlockedWithPassword,
             usedPassword
@@ -391,13 +412,13 @@ exports.extractSecuritySocialData = async (filePath, options = {}) => {
     }
 };
 
-exports.extractActaInicioData = async (filePath) => {
+exports.extractActaInicioData = async (filePath, options = {}) => {
     try {
-        const dataBuffer = fs.readFileSync(filePath);
+        const { buffer: dataBuffer, filename, isPdf, isImage } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
 
-        if (filePath.endsWith('.pdf')) {
+        if (isPdf) {
             try {
                 text = await parsePdfText(dataBuffer);
                 if (!text || text.trim().length < 80) {
@@ -425,9 +446,9 @@ exports.extractActaInicioData = async (filePath) => {
         `;
 
         let result;
-        const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
-        if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
-            const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
+        if ((useMultimodal && isPdf) || isImage) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const mimeType = isImage ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : "application/pdf";
             const filePart = {
                 inlineData: {
                     data: dataBuffer.toString("base64"),
@@ -450,26 +471,28 @@ exports.extractActaInicioData = async (filePath) => {
 
 exports.extractRutData = async (filePath, options = {}) => {
     try {
-        const dataBuffer = fs.readFileSync(filePath);
+        const { buffer: dataBuffer, filename, isPdf, isImage } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
         let unlockedWithCedula = false;
         let unlockedWithPassword = false;
         let usedPassword = null;
+        let effectiveBuffer = dataBuffer;
 
-        if (filePath.endsWith('.pdf')) {
-            // Check encryption and unlock with candidate passwords (e.g. user cédula)
+        if (isPdf) {
             const unlockResult = await unlockPdfWithCandidates(dataBuffer, {
                 password: options.password,
                 candidatePasswords: options.candidatePasswords,
-                targetSavePath: filePath
+                targetSavePath: (typeof filePath === 'string' && fs.existsSync(filePath)) ? filePath : null
             });
 
             text = unlockResult.text;
             usedPassword = unlockResult.usedPassword;
+            if (unlockResult.cleanBuffer) {
+                effectiveBuffer = unlockResult.cleanBuffer;
+            }
             if (unlockResult.unlocked) {
                 unlockedWithPassword = true;
-                // If the used password matches any of the candidate passwords (cédula)
                 if (options.candidatePasswords && options.candidatePasswords.some(c => c && String(c).trim() === String(usedPassword))) {
                     unlockedWithCedula = true;
                 }
@@ -497,14 +520,13 @@ exports.extractRutData = async (filePath, options = {}) => {
         `;
 
         let result;
-        const isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg');
-        if ((useMultimodal && filePath.endsWith('.pdf')) || isImage) {
+        if ((useMultimodal && isPdf) || isImage) {
             console.log("Procesando RUT escaneado o imagen. Usando modo multimodal de Gemini...");
-            const freshBuffer = fs.readFileSync(filePath);
-            const mimeType = isImage ? `image/${filePath.split('.').pop()}` : "application/pdf";
+            const ext = filename.split('.').pop().toLowerCase();
+            const mimeType = isImage ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : "application/pdf";
             const filePart = {
                 inlineData: {
-                    data: freshBuffer.toString("base64"),
+                    data: effectiveBuffer.toString("base64"),
                     mimeType: mimeType
                 }
             };
@@ -518,6 +540,7 @@ exports.extractRutData = async (filePath, options = {}) => {
         const extracted = JSON.parse(jsonText);
         return {
             ...extracted,
+            cleanBuffer: effectiveBuffer !== dataBuffer ? effectiveBuffer : null,
             unlockedWithCedula,
             unlockedWithPassword,
             usedPassword
@@ -551,8 +574,6 @@ exports.improveEvidenceText = async (arg1, arg2, arg3) => {
             contractorName = arg3 || '';
         }
         if (!rawText || !rawText.trim()) return rawText;
-
-        const targetWords = Math.floor(Math.random() * (44 - 34 + 1)) + 34;
 
         const prompt = `
             Eres un experto redactor de informes técnicos y cuentas de cobro para contratistas de entidades públicas en Colombia.
@@ -590,5 +611,3 @@ exports.improveEvidenceText = async (arg1, arg2, arg3) => {
         return rawText;
     }
 };
-
-

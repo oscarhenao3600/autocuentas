@@ -89,12 +89,21 @@ exports.generateDocument = async (templateName, data) => {
             centered: true,
             fileType: "docx",
             getImage: function(tagValue) {
-                return fs.readFileSync(tagValue);
+                if (Buffer.isBuffer(tagValue)) {
+                    return tagValue;
+                }
+                if (typeof tagValue === 'string' && fs.existsSync(tagValue)) {
+                    return fs.readFileSync(tagValue);
+                }
+                return null;
             },
             getSize: function(img, tagValue) {
                 try {
-                    const buf = fs.readFileSync(tagValue);
-                    return getModerateImageSize(buf);
+                    const buf = Buffer.isBuffer(tagValue) 
+                        ? tagValue 
+                        : (typeof tagValue === 'string' && fs.existsSync(tagValue) ? fs.readFileSync(tagValue) : null);
+                    if (buf) return getModerateImageSize(buf);
+                    return [300, 200];
                 } catch (_) {
                     return [300, 200];
                 }

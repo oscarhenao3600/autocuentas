@@ -58,14 +58,19 @@ async function unlockAndSaveCleanPdf(parser, targetSavePath) {
                 pdfPage.drawImage(img, { x: 0, y: 0, width: page.width, height: page.height });
             }
             const cleanBytes = await pdfDoc.save();
-            fs.writeFileSync(targetSavePath, Buffer.from(cleanBytes));
-            console.log(`[PDF Utils] Documento desencriptado y guardado sin clave en: ${targetSavePath}`);
-            return true;
+            const cleanBuffer = Buffer.from(cleanBytes);
+            if (targetSavePath) {
+                try {
+                    fs.writeFileSync(targetSavePath, cleanBuffer);
+                    console.log(`[PDF Utils] Documento desencriptado y guardado sin clave en: ${targetSavePath}`);
+                } catch (_) {}
+            }
+            return cleanBuffer;
         }
     } catch (err) {
         console.warn("[PDF Utils] No se pudo re-guardar copia limpia del PDF (se mantiene el archivo previo):", err.message);
     }
-    return false;
+    return null;
 }
 
 /**
@@ -135,10 +140,9 @@ async function unlockPdfWithCandidates(filePathOrBuffer, options = {}) {
             const textResult = await parser.getText();
             const text = textResult.text || "";
 
-            // If a target save path is provided, convert to a clean unencrypted PDF
-            if (targetSavePath) {
-                await unlockAndSaveCleanPdf(parser, targetSavePath);
-            }
+            // If a target save path is provided or to obtain decrypted buffer in memory
+            let cleanBuffer = null;
+            cleanBuffer = await unlockAndSaveCleanPdf(parser, targetSavePath);
 
             console.log(`[PDF Utils] PDF desbloqueado con éxito usando contraseña candidata.`);
             return {
@@ -146,7 +150,8 @@ async function unlockPdfWithCandidates(filePathOrBuffer, options = {}) {
                 isEncrypted: true,
                 unlocked: true,
                 usedPassword: candidate,
-                parser
+                parser,
+                cleanBuffer
             };
         } catch (passErr) {
             // Password did not work, continue to next candidate

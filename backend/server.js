@@ -63,12 +63,46 @@ const connectMongoWithRetry = () => {
 };
 connectMongoWithRetry();
 
-// Static files for downloads
+// Static files for downloads (with transparent Google Drive streaming fallback)
 const path = require('path');
+const storageService = require('./services/storage.service');
+const googleDriveService = require('./services/googleDrive.service');
+
 app.use('/generated', express.static(path.join(__dirname, 'generated')));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Fallback handlers for /uploads and /generated to stream directly from Google Drive
+app.get('/uploads/:fileIdOrName', async (req, res, next) => {
+    const driveId = storageService.extractDriveId(req.params.fileIdOrName);
+    if (!driveId) return next();
+    try {
+        const metadata = await googleDriveService.getMetadata(driveId);
+        res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(metadata.name || 'archivo')}"`);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        const stream = await googleDriveService.getFileStream(driveId);
+        stream.pipe(res);
+    } catch (err) {
+        next();
+    }
+});
+
+app.get('/generated/:fileIdOrName', async (req, res, next) => {
+    const driveId = storageService.extractDriveId(req.params.fileIdOrName);
+    if (!driveId) return next();
+    try {
+        const metadata = await googleDriveService.getMetadata(driveId);
+        res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(metadata.name || 'archivo')}"`);
+        const stream = await googleDriveService.getFileStream(driveId);
+        stream.pipe(res);
+    } catch (err) {
+        next();
+    }
+});
+
 // Routes
+app.use('/api/drive',     require('./routes/drive.routes'));
 app.use('/api/auth',      require('./routes/auth.routes'));
 app.use('/api/accounts',  require('./routes/account.routes'));
 app.use('/api/contracts', require('./routes/contract.routes'));

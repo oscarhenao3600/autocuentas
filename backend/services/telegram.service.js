@@ -7,6 +7,7 @@ const TelegramPrivilege = require('../models/TelegramPrivilege');
 const PaymentConfig = require('../models/PaymentConfig');
 const PaymentReceipt = require('../models/PaymentReceipt');
 const geminiService = require('./gemini.service');
+const storageService = require('./storage.service');
 const { generateBillingPackage } = require('../controllers/billing.controller');
 const { calculatePeriods, filterSpecificObligations, isGeneralObligation, getContractDurationText } = require('../utils/period.utils');
 
@@ -18,7 +19,7 @@ let isPolling = false;
 const sessions = new Map();
 
 /**
- * Downloads a file (photo or document) from Telegram's servers and saves it to uploads
+ * Downloads a file (photo or document) from Telegram's servers and saves it to Google Drive
  */
 const downloadFileFromTelegram = async (fileId, obligationIndex, originalName, mimeType) => {
     try {
@@ -35,22 +36,24 @@ const downloadFileFromTelegram = async (fileId, obligationIndex, originalName, m
         const arrayBuffer = await fileStreamResponse.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
         
-        const uploadsDir = path.join(__dirname, '..', 'uploads');
-        if (!fs.existsSync(uploadsDir)) {
-            fs.mkdirSync(uploadsDir, { recursive: true });
-        }
-        
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         const ext = path.extname(originalName) || path.extname(filePathOnTelegram) || '.jpg';
         const safeName = `evidence_${obligationIndex}-${uniqueSuffix}${ext}`;
-        const localPath = path.join(uploadsDir, safeName);
         
-        fs.writeFileSync(localPath, buffer);
+        const saved = await storageService.saveFile({
+            buffer,
+            filename: safeName,
+            mimetype: mimeType || 'image/jpeg',
+            pathSegments: ['telegram_evidencias']
+        });
         
         return {
-            filename: originalName,
-            path: `uploads/${safeName}`,
-            mimetype: mimeType
+            filename: originalName || safeName,
+            path: saved.path,
+            relativePath: saved.path,
+            driveId: saved.driveId,
+            mimetype: mimeType || 'image/jpeg',
+            buffer
         };
     } catch (err) {
         console.error('❌ Error al descargar archivo de Telegram:', err.message);
@@ -81,7 +84,7 @@ function extractTelegramFile(message) {
 }
 
 /**
- * Generic downloader for any Telegram media file to the uploads directory
+ * Generic downloader for any Telegram media file directly to Google Drive
  */
 const downloadTelegramMedia = async (fileId, prefix = 'doc', originalName = '', mimeType = '') => {
     try {
@@ -98,23 +101,25 @@ const downloadTelegramMedia = async (fileId, prefix = 'doc', originalName = '', 
         const arrayBuffer = await fileStreamResponse.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
         
-        const uploadsDir = path.join(__dirname, '..', 'uploads');
-        if (!fs.existsSync(uploadsDir)) {
-            fs.mkdirSync(uploadsDir, { recursive: true });
-        }
-        
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         const ext = path.extname(originalName) || path.extname(filePathOnTelegram) || '.pdf';
         const safeName = `${prefix}_${uniqueSuffix}${ext}`;
-        const localPath = path.join(uploadsDir, safeName);
         
-        fs.writeFileSync(localPath, buffer);
+        const saved = await storageService.saveFile({
+            buffer,
+            filename: safeName,
+            mimetype: mimeType || 'application/pdf',
+            pathSegments: ['telegram_docs', prefix]
+        });
         
         return {
             filename: originalName || safeName,
-            relativePath: `uploads/${safeName}`,
-            absolutePath: localPath,
-            mimetype: mimeType
+            relativePath: saved.path,
+            path: saved.path,
+            absolutePath: saved.path,
+            driveId: saved.driveId,
+            mimetype: mimeType,
+            buffer
         };
     } catch (err) {
         console.error('❌ Error al descargar archivo de Telegram:', err.message);
@@ -198,11 +203,17 @@ const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard) => {
  * Sends a binary document/archive by Telegram
  */
 const sendTelegramDocument = async (chatId, filePath, caption) => {
-    if (!TELEGRAM_TOKEN || !fs.existsSync(filePath)) return;
+    if (!TELEGRAM_TOKEN || !filePath) return;
     try {
-        const filename = path.basename(filePath);
-        const fileBuffer = fs.readFileSync(filePath);
-        
+        const fileBuffer = await storageService.getFileBuffer(filePath);
+        if (!fileBuffer) {
+            console.error('⚠️ Archivo no encontrado para enviar por Telegram:', filePath);
+            return;
+        }
+
+        let filename = path.basename(filePath.replace(/\\/g, '/')) || 'documento.bin';
+        if (filename.length > 100) filename = 'documento.bin';
+
         const boundary = '----TelegramBotBoundary' + Date.now().toString(16);
         const ext = path.extname(filename).toLowerCase();
         let mime = 'application/octet-stream';
@@ -217,7 +228,7 @@ const sendTelegramDocument = async (chatId, filePath, caption) => {
         const footerBuffer = Buffer.from(footer, 'utf-8');
         const multipartBody = Buffer.concat([headerBuffer, fileBuffer, footerBuffer]);
 
-        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument?chat_id=${chatId}&caption=${encodeURIComponent(caption)}`, {
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument?chat_id=${chatId}&caption=${encodeURIComponent(caption || '')}`, {
             method: 'POST',
             headers: {
                 'Content-Type': `multipart/form-data; boundary=${boundary}`
@@ -240,10 +251,17 @@ const sendTelegramDocument = async (chatId, filePath, caption) => {
  * Sends an image or document with Inline Keyboard to a chat
  */
 const sendTelegramMediaWithKeyboard = async (chatId, filePath, caption, inlineKeyboard = null) => {
-    if (!TELEGRAM_TOKEN || !fs.existsSync(filePath)) return null;
+    if (!TELEGRAM_TOKEN || !filePath) return null;
     try {
-        const filename = path.basename(filePath);
-        const fileBuffer = fs.readFileSync(filePath);
+        const fileBuffer = await storageService.getFileBuffer(filePath);
+        if (!fileBuffer) {
+            console.error('⚠️ Media no encontrada para enviar por Telegram:', filePath);
+            return null;
+        }
+
+        let filename = path.basename(filePath.replace(/\\/g, '/')) || 'archivo.bin';
+        if (filename.length > 100) filename = 'archivo.bin';
+
         const ext = path.extname(filename).toLowerCase();
         const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
 
@@ -256,7 +274,7 @@ const sendTelegramMediaWithKeyboard = async (chatId, filePath, caption, inlineKe
         const footer = `\r\n--${boundary}--\r\n`;
         const multipartBody = Buffer.concat([Buffer.from(header, 'utf-8'), fileBuffer, Buffer.from(footer, 'utf-8')]);
 
-        let url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${endpoint}?chat_id=${chatId}&caption=${encodeURIComponent(caption)}`;
+        let url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${endpoint}?chat_id=${chatId}&caption=${encodeURIComponent(caption || '')}`;
         if (inlineKeyboard && inlineKeyboard.length > 0) {
             url += `&reply_markup=${encodeURIComponent(JSON.stringify({ inline_keyboard: inlineKeyboard }))}`;
         }
@@ -470,7 +488,7 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
 
         const { period, zipPath } = await generateBillingPackage(periodId, user._id);
 
-        if (zipPath && fs.existsSync(zipPath)) {
+        if (zipPath && (storageService.extractDriveId(zipPath) || fs.existsSync(zipPath))) {
             // Count towards provider monthly usage if applicable
             const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
             if (privilege && privilege.operatorType === 'provider') {
