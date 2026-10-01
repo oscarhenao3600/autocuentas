@@ -80,6 +80,8 @@ function verifyZip(zipRelPath, expected) {
 // Run verifications
 const res1 = verifyZip('generated/Cuenta_Cobro_Oscar_Alexander_Henao_Hernandez_Acta_1.zip', {
     cert: {
+        dependencia: 'SECRETARIA TIC - 11401',
+        rubro: '2.3.2.02.02.009.4599007.077 - 001',
         actaInicioFolio: 'Acta de Inicio (solo la primera vez): 1 folio(s).',
         primeroCheck: 'PRIMERO _ X _',
         segundoEmpty: 'SEGUNDO ___',
@@ -103,6 +105,8 @@ const res1 = verifyZip('generated/Cuenta_Cobro_Oscar_Alexander_Henao_Hernandez_A
 
 const res2 = verifyZip('generated/Cuenta_Cobro_Oscar_Alexander_Henao_Hernandez_Acta_2.zip', {
     cert: {
+        dependencia: 'SECRETARIA TIC - 11401',
+        rubro: '2.3.2.02.02.009.4599007.077 - 001',
         actaInicioFolio: 'Acta de Inicio (solo la primera vez): 0 folio(s).',
         primeroEmpty: 'PRIMERO ___',
         segundoCheck: 'SEGUNDO _ X _',

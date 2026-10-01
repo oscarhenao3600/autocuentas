@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const { generateDocument } = require('../services/document.service');
 const { calculateSocialSecurity } = require('../utils/period.utils');
+const { getFormatNameForDependency } = require('../utils/secretariasDictionary');
 const { createBillingZip } = require('../services/archive.service');
 const PizZip = require('pizzip');
 
@@ -23,7 +24,7 @@ async function testCompleteGeneration() {
         contractorPhone: '3113414361',
         contractorEmail: 'oscarhenao3600@gmail.com',
         supervisorName: 'ANDRES FELIPE BARRERA PEREZ',
-        supervisorDependency: 'Secretaría de las TIC - 11401',
+        supervisorDependency: 'SECRETARIA TIC - 11401',
         startDate: '2026-08-28',
         endDate: '2026-12-20',
         totalValue: 11500000,
@@ -100,7 +101,7 @@ async function testCompleteGeneration() {
     const commonData1 = {
         fecha_certificado: '30 - 09 - 2026',
         nombre_supervisor: contract.supervisorName,
-        dependencia: contract.supervisorDependency,
+        dependencia: getFormatNameForDependency(contract.supervisorDependency),
         nombre_contratista: contract.contractorName,
         identificacion_contratista: contract.idNumber,
         tipo_contrato: contract.contractType,
@@ -258,7 +259,7 @@ async function testCompleteGeneration() {
     const commonData2 = {
         fecha_certificado: '31 - 10 - 2026',
         nombre_supervisor: contract.supervisorName,
-        dependencia: contract.supervisorDependency,
+        dependencia: getFormatNameForDependency(contract.supervisorDependency),
         nombre_contratista: contract.contractorName,
         identificacion_contratista: contract.idNumber,
         tipo_contrato: contract.contractType,

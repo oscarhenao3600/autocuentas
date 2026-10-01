@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
-import { filterSpecificObligations, getContractDurationText } from '../utils/period.utils';
+import { filterSpecificObligations, getContractDurationText, formatRubroPresupuestal } from '../utils/period.utils';
+import { getSecretarias, resolveSecretaria } from '../utils/secretariasDictionary';
 import { motion } from 'framer-motion';
 import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -388,8 +389,29 @@ const ContractSetup = () => {
                                     <input className="input" value={contract.rp || ''} onChange={(e) => setContract({...contract, rp: e.target.value})} />
                                 </div>
                                 <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                                    <label className="label">Rubro Presupuestal</label>
-                                    <input className="input" value={contract.rubro || ''} onChange={(e) => setContract({...contract, rubro: e.target.value})} />
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                                        <label className="label" style={{ margin: 0 }}>Código (Rubro Presupuestal)</label>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            Formato oficial: [RUBRO] - [FUENTE] (Ej: 2.3.2.02.02.009.4599007.077 - 001)
+                                        </span>
+                                    </div>
+                                    <input 
+                                        className="input" 
+                                        value={contract.rubro || ''} 
+                                        onChange={(e) => setContract({...contract, rubro: e.target.value})} 
+                                        onBlur={(e) => {
+                                            const formatted = formatRubroPresupuestal(e.target.value);
+                                            if (formatted && formatted !== e.target.value) {
+                                                setContract(prev => ({ ...prev, rubro: formatted }));
+                                            }
+                                        }}
+                                        placeholder="Ej: 2.3.2.02.02.009.4599007.077 - 001" 
+                                    />
+                                    {contract.rubro && (
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                                            💡 Se plasmará en el Certificado del Supervisor como: <strong style={{ color: 'var(--text-main)' }}>{formatRubroPresupuestal(contract.rubro)}</strong>
+                                        </div>
+                                    )}
                                 </div>
                                 
                                 <div className="form-group">
@@ -426,8 +448,52 @@ const ContractSetup = () => {
                                     <input className="input" value={contract.supervisorName || ''} onChange={(e) => setContract({...contract, supervisorName: e.target.value})} />
                                 </div>
                                 <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                                    <label className="label">Dependencia / Cargo del Supervisor</label>
-                                    <input className="input" value={contract.supervisorDependency || ''} onChange={(e) => setContract({...contract, supervisorDependency: e.target.value})} placeholder="Ej: Secretaría de Planeación" />
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                                        <label className="label" style={{ margin: 0 }}>Dependencia / Cargo del Supervisor</label>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600 }}>
+                                            Diccionario de Secretarías
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '0.5rem' }}>
+                                        <input 
+                                            className="input" 
+                                            value={contract.supervisorDependency || ''} 
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                setContract({ ...contract, supervisorDependency: val });
+                                            }} 
+                                            placeholder="Ej: Secretaría de las TIC - 11401" 
+                                        />
+                                        <select
+                                            className="input"
+                                            style={{ width: 'auto', minWidth: '180px', cursor: 'pointer' }}
+                                            value=""
+                                            onChange={(e) => {
+                                                const secId = e.target.value;
+                                                if (!secId) return;
+                                                const sec = getSecretarias().find(s => s.id === secId);
+                                                if (sec) {
+                                                    setContract({
+                                                        ...contract,
+                                                        supervisorDependency: sec.nombreFormato,
+                                                        supervisorName: (!contract.supervisorName && sec.supervisorDefault) ? sec.supervisorDefault : contract.supervisorName
+                                                    });
+                                                }
+                                            }}
+                                        >
+                                            <option value="">🏛️ Seleccionar sugerencia...</option>
+                                            {getSecretarias().map(s => (
+                                                <option key={s.id} value={s.id}>
+                                                    {s.nombreCorto || s.sigla} ({s.nombreFormato})
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    {contract.supervisorDependency && (
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                                            💡 Se plasmará en el Word como: <strong style={{ color: 'var(--text-main)' }}>{contract.supervisorDependency}</strong>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             <div style={{ marginTop: '1.25rem', padding: '1rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border)' }}>

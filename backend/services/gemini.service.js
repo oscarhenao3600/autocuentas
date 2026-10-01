@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
 const path = require("path");
 const { parsePdfText, unlockPdfWithCandidates } = require("../utils/pdf.utils");
+const { formatRubroPresupuestal } = require("../utils/period.utils");
 const storageService = require("./storage.service");
 require("dotenv").config();
 
@@ -153,8 +154,15 @@ exports.extractRpData = async (filePath, options = {}) => {
             Campos requeridos:
             - rpNumber (Número de Registro Presupuestal - RP, ej: 00762)
             - cdpNumber (Número de Certificado de Disponibilidad Presupuestal - CDP)
-            - rubro (Código o Rubro presupuestal o partida de presupuesto asignada, ej: 2.1.2.02.01.003.02)
+            - rubro (Código completo del Rubro Presupuestal estructurado con su fuente de financiación en formato exacto 'RUBRO - FUENTE', ej: '2.3.2.02.02.009.4599007.077 - 001'. Si en el RP aparece '2.3.2.02.02.009.4599007.077 ... 001 - RECURSOS PROPIOS', extrae y unifica el código del rubro y el código de la fuente como '2.3.2.02.02.009.4599007.077 - 001')
+            - rubroCodigo (El código numérico principal del rubro sin la fuente, ej: '2.3.2.02.02.009.4599007.077')
+            - fuenteFinanciacion (Texto de la fuente de financiación si figura, ej: '001 - RECURSOS PROPIOS')
+            - fuenteCodigo (Código numérico de la fuente de financiación, ej: '001')
+            - rubroNombre (La descripción o nombre del rubro o proyecto, ej: 'ARMENIA VIVE TIC: HACIA UN TERRITOR')
             - rpDate (Fecha de expedición o registro del RP)
+            - unidadEjecutora (Texto literal del campo 'UNIDAD EJECUTORA' si figura en el encabezado del RP, ej: "11401 - SECRETARIA TIC" o "11201 - SECRETARIA DE HACIENDA")
+            - unidadEjecutoraCodigo (El código numérico de la unidad ejecutora, ej: "11401")
+            - unidadEjecutoraNombre (El nombre de la unidad ejecutora, ej: "SECRETARIA TIC")
         `;
 
         let result;
@@ -173,7 +181,9 @@ exports.extractRpData = async (filePath, options = {}) => {
         const response = await result.response;
         const jsonText = response.text().replace(/```json|```/g, "").trim();
         
-        return JSON.parse(jsonText);
+        const parsed = JSON.parse(jsonText);
+        parsed.rubro = formatRubroPresupuestal(parsed.rubro || parsed.rubroCodigo, parsed.fuenteCodigo || parsed.fuenteFinanciacion);
+        return parsed;
     } catch (error) {
         console.error("Error en extractRpData:", error);
         throw new Error("No se pudo procesar el RP con IA");
@@ -449,6 +459,7 @@ exports.extractActaInicioData = async (filePath, options = {}) => {
             - supervisorName (Nombre del supervisor que aprueba o firma el acta o figura en la entidad estatal)
             - initialDurationMonths (Plazo en meses si aparece especificado como número entero ej: 4, o la duración en meses calculada a partir de los días o fechas)
             - executionTerm (Texto literal del plazo o duración del contrato si aparece en texto o días, ej: "CIENTO QUINCE (115) DIAS CALENDARIO..." o "115 DÍAS CALENDARIO")
+            - unidadContratacion (Texto del campo 'Unidad de Contratación' o dependencia contratante que figura en el acta de inicio, ej: "SECRETARIA TIC" o "SECRETARÍA DE LAS TECNOLOGÍAS...")
         `;
 
         let result;

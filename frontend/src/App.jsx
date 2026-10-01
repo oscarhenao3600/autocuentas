@@ -9,6 +9,7 @@ import ConfigureFormats from './pages/ConfigureFormats';
 import ContractorsList from './pages/ContractorsList';
 import AdminDocuments from './pages/AdminDocuments';
 import TelegramPrivileges from './pages/TelegramPrivileges';
+import SecretariasDictionary from './pages/SecretariasDictionary';
 
 const ProtectedRoute = ({ children }) => {
     const { user, loading } = useAuth();
@@ -85,6 +86,14 @@ function App() {
                         element={
                             <ProtectedRoute>
                                 <TelegramPrivileges />
+                            </ProtectedRoute>
+                        } 
+                    />
+                    <Route 
+                        path="/admin/secretarias" 
+                        element={
+                            <ProtectedRoute>
+                                <SecretariasDictionary />
                             </ProtectedRoute>
                         } 
                     />

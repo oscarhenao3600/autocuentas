@@ -253,3 +253,55 @@ export const determineActiveAct = (contract, existingPeriods = [], currentDate =
     };
 };
 
+/**
+ * Formatea y estructura el Rubro Presupuestal combinándolo con su fuente de financiación:
+ * Formato oficial: [RUBRO] - [FUENTE] (ej: "2.3.2.02.02.009.4599007.077 - 001").
+ * 
+ * Si del RP se extrae la línea completa:
+ * "2.3.2.02.02.009.4599007.077 ARMENIA VIVE TIC: HACIA UN TERRITOR 001 - RECURSOS PROPIOS $11,500,000.00"
+ * Extrae el código del rubro y el código de la fuente (ej: 001 Recursos Propios)
+ * y los unifica como "2.3.2.02.02.009.4599007.077 - 001".
+ */
+export function formatRubroPresupuestal(rawRubro = '', rawFuente = '') {
+    if (!rawRubro && !rawFuente) return '';
+    const fullText = (String(rawRubro || '') + ' ' + String(rawFuente || '')).trim();
+
+    // 1. Si ya viene formateado como "X.X.X.X - YYY", limpiarlo y retornarlo
+    const alreadyFormatted = fullText.match(/(\d+(?:\.\d+){2,})\s*[-–]\s*(\d{1,4})/);
+    if (alreadyFormatted) {
+        return alreadyFormatted[1].trim() + ' - ' + alreadyFormatted[2].trim();
+    }
+
+    // 2. Extraer código del rubro (ej: 2.3.2.02.02.009.4599007.077 o 2.1.2.02.01.003.02)
+    const rubroMatch = fullText.match(/\b(\d+(?:\.\d+){2,})\b/);
+    const rubroCode = rubroMatch ? rubroMatch[1] : '';
+
+    if (!rubroCode) return String(rawRubro).trim();
+
+    // Remover el rubroCode para evitar colisiones con números internos como .009.
+    const remainingText = fullText.replace(rubroCode, ' ');
+
+    // 3. Extraer código de la fuente (ej: 001 - RECURSOS PROPIOS, 001, etc.)
+    let fuenteCode = '';
+    const fuentePattern1 = remainingText.match(/(\d{3})\s*[-–]\s*(?:RECURSOS|ICLD|SGP|INGRESOS|PROPIOS)/i);
+    const fuentePattern2 = remainingText.match(/(?:RECURSOS|FUENTE|FTE)[\s:]*(\d{1,4})/i);
+    const fuentePattern3 = (rawFuente || '').match(/\b(\d{1,4})\b/);
+    const fuentePattern4 = remainingText.match(/\b(00[1-9]|0[1-9]\d|[1-9]\d{2})\b/);
+
+    if (fuentePattern1) {
+        fuenteCode = fuentePattern1[1];
+    } else if (fuentePattern2) {
+        fuenteCode = fuentePattern2[1];
+    } else if (fuentePattern3) {
+        fuenteCode = fuentePattern3[1];
+    } else if (fuentePattern4) {
+        fuenteCode = fuentePattern4[1];
+    }
+
+    if (rubroCode && fuenteCode) {
+        return rubroCode + ' - ' + fuenteCode;
+    }
+    return rubroCode;
+}
+
+

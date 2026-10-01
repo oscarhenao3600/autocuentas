@@ -218,6 +218,22 @@ export default function Dashboard() {
                         <span>Plantillas</span>
                     </button>
                     <button
+                        onClick={() => navigate('/admin/secretarias')}
+                        className="btn"
+                        style={{
+                            background: 'transparent',
+                            color: 'var(--text-main)',
+                            fontSize: '0.85rem',
+                            padding: '0.45rem 0.85rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem'
+                        }}
+                    >
+                        <Building2 size={16} color="#0284c7" />
+                        <span>Diccionario Secretarías</span>
+                    </button>
+                    <button
                         onClick={() => navigate('/admin/telegram')}
                         className="btn"
                         style={{

@@ -12,7 +12,8 @@ const {
     extractRutData, 
     extractSecuritySocialData 
 } = require('../services/gemini.service');
-const { filterSpecificObligations, determineActiveAct } = require('../utils/period.utils');
+const { filterSpecificObligations, determineActiveAct, formatRubroPresupuestal } = require('../utils/period.utils');
+const { formatDependenciaWithCode } = require('../utils/secretariasDictionary');
 const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
 const resolveContract = async (userId, contractId = null) => {
@@ -561,7 +562,7 @@ exports.updateContract = async (req, res) => {
             'periodType', 'initialDurationMonths', 'additionDurationMonths', 'hasAddition',
             'additionValue', 'additionValueWord', 'additionStartDate', 'additionEndDate',
             'additionCdp', 'additionRp', 'additionRubro', 'additionDuration',
-            'executionTerm'
+            'executionTerm', 'unidadEjecutora', 'unidadEjecutoraCodigo', 'unidadContratacion'
         ];
 
         allowedFields.forEach(field => {
@@ -613,8 +614,18 @@ exports.uploadRp = async (req, res) => {
 
         if (rpData.rpNumber)  contract.rp    = rpData.rpNumber;
         if (rpData.cdpNumber) contract.cdp   = rpData.cdpNumber;
-        if (rpData.rubro)     contract.rubro  = rpData.rubro;
+        if (rpData.rubro)     contract.rubro  = formatRubroPresupuestal(rpData.rubro, rpData.fuenteCodigo || rpData.fuenteFinanciacion);
         if (rpData.rpDate)    contract.rpDate = rpData.rpDate;
+        if (rpData.unidadEjecutora) contract.unidadEjecutora = rpData.unidadEjecutora;
+        if (rpData.unidadEjecutoraCodigo) contract.unidadEjecutoraCodigo = rpData.unidadEjecutoraCodigo;
+        if (rpData.fuenteFinanciacion) contract.fuenteFinanciacion = rpData.fuenteFinanciacion;
+        if (rpData.fuenteCodigo) contract.fuenteCodigo = rpData.fuenteCodigo;
+
+        // Auto-formatear supervisorDependency: [DEPENDENCIA] - [CODIGO] (ej: SECRETARIA TIC - 11401)
+        const candidateDep = contract.unidadContratacion || contract.supervisorDependency || rpData.unidadEjecutoraNombre || rpData.unidadEjecutora;
+        if (candidateDep) {
+            contract.supervisorDependency = formatDependenciaWithCode(candidateDep, rpData.unidadEjecutoraCodigo);
+        }
 
         await contract.save();
 
@@ -707,7 +718,7 @@ exports.uploadAdditionRp = async (req, res) => {
 
         if (rpData.rpNumber)  contract.additionRp    = rpData.rpNumber;
         if (rpData.cdpNumber) contract.additionCdp   = rpData.cdpNumber;
-        if (rpData.rubro)     contract.additionRubro  = rpData.rubro;
+        if (rpData.rubro)     contract.additionRubro  = formatRubroPresupuestal(rpData.rubro, rpData.fuenteCodigo || rpData.fuenteFinanciacion);
 
         await contract.save();
 
@@ -757,6 +768,13 @@ exports.uploadActaInicio = async (req, res) => {
         if (actaData.supervisorName && !contract.supervisorName) contract.supervisorName = actaData.supervisorName;
         if (actaData.initialDurationMonths) contract.initialDurationMonths = Number(actaData.initialDurationMonths);
         if (actaData.executionTerm && !contract.executionTerm) contract.executionTerm = actaData.executionTerm;
+        if (actaData.unidadContratacion) {
+            contract.unidadContratacion = actaData.unidadContratacion;
+            contract.supervisorDependency = formatDependenciaWithCode(
+                actaData.unidadContratacion,
+                contract.unidadEjecutoraCodigo
+            );
+        }
 
         await contract.save();
 

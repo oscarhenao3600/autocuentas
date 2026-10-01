@@ -47,6 +47,26 @@ const contractSchema = new mongoose.Schema({
         type: String,
         default: "Secretaría de Planeación"
     },
+    unidadEjecutora: {
+        type: String,
+        default: ""
+    },
+    unidadEjecutoraCodigo: {
+        type: String,
+        default: ""
+    },
+    unidadContratacion: {
+        type: String,
+        default: ""
+    },
+    fuenteFinanciacion: {
+        type: String,
+        default: ""
+    },
+    fuenteCodigo: {
+        type: String,
+        default: ""
+    },
     contractorAddress: {
         type: String,
         default: ""

@@ -8,7 +8,8 @@ const { createBillingZip } = require('../services/archive.service');
 const { extractSecuritySocialData, improveEvidenceText, generateObligationAnnexDescription, generateExecutionEvidencesSummary } = require('../services/gemini.service');
 const annexService = require('../services/annex.service');
 const storageService = require('../services/storage.service');
-const { calculateSocialSecurity } = require('../utils/period.utils');
+const { calculateSocialSecurity, formatRubroPresupuestal } = require('../utils/period.utils');
+const { getFormatNameForDependency } = require('../utils/secretariasDictionary');
 
 // ──────────────────────────────────────────────────────────────
 // Helper: Calculate IBC (Ingreso Base de Cotización)
@@ -473,7 +474,7 @@ const generateBillingPackage = async (periodId, userId) => {
             // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
             fecha_certificado:                 fechaCorteSign,
             nombre_supervisor:                 contract.supervisorName || '',
-            dependencia:                       contract.supervisorDependency || 'Secretaría de Planeación',
+            dependencia:                       getFormatNameForDependency(contract.supervisorDependency, 'SECRETARIA DE PLANEACION', contract.unidadEjecutoraCodigo),
             nombre_contratista:                contract.contractorName || user.fullName || '',
             identificacion_contratista:        contract.idNumber || '',
             tipo_contrato:                     contract.contractType || 'PRESTACIÓN DE SERVICIOS DE APOYO A LA GESTION',
@@ -482,7 +483,10 @@ const generateBillingPackage = async (periodId, userId) => {
             fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateEs(contract.additionEndDate) : (effectiveEndDate ? formatDateEs(effectiveEndDate) : ''),
             cdp:                               periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
             rp:                                periodIsAddition ? (contract.additionRp || contract.rp || '') : (contract.rp || ''),
-            rubro_presupuestal:                periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
+            rubro_presupuestal:                formatRubroPresupuestal(
+                periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
+                contract.fuenteCodigo || contract.fuenteFinanciacion
+            ),
             valor_total:                       contract.hasAddition ? combinedTotalVal.toLocaleString('es-CO') : totalValFormatted,
             entidad_bancaria:                  contract.bankName || '',
             valor_autorizado_pago:             monthlyValFormatted,
@@ -591,7 +595,7 @@ const generateBillingPackage = async (periodId, userId) => {
             contractType:     contract.contractType       || '',
             contractObject:   contract.contractObject     || '',
             supervisorName:   contract.supervisorName     || '',
-            supervisorDependency: contract.supervisorDependency || 'Secretaría de Planeación',
+            supervisorDependency: getFormatNameForDependency(contract.supervisorDependency, 'SECRETARIA DE PLANEACION', contract.unidadEjecutoraCodigo),
             contractorAddress: contract.contractorAddress || '',
             contractorPhone:   contract.contractorPhone   || '',
             startDate:        contract.startDate ? formatDateEs(contract.startDate) : '',
@@ -611,7 +615,10 @@ const generateBillingPackage = async (periodId, userId) => {
             ibcValue:         ibc.toLocaleString('es-CO'),
             rpNumber:         periodIsAddition ? (contract.additionRp || contract.rp || '') : (contract.rp || ''),
             cdpNumber:        periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
-            rubro:            periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
+            rubro:            formatRubroPresupuestal(
+                periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
+                contract.fuenteCodigo || contract.fuenteFinanciacion
+            ),
             actNumber:        period.actNumber.toString(),
             periodFrom:       formatDateNumeric(period.periodFrom),
             periodTo:         formatDateNumeric(period.periodTo),
