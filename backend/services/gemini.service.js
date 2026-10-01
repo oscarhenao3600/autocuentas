@@ -364,11 +364,17 @@ exports.extractSecuritySocialData = async (filePath, options = {}) => {
             Campos requeridos:
             - operator (El nombre del operador de la planilla, ej: SIMPLE, SOI, miplanilla, aportesenlinea, en mayúsculas)
             - planillaNumber (Número de planilla de aportes, suele ser un número largo de 9 o 10 dígitos)
-            - totalPaid (Número entero. El valor total pagado en la planilla, ej: 585200)
-            - saludPaid (Número entero. El valor pagado al subsistema de salud, ej: 180000)
-            - pensionPaid (Número entero. El valor pagado al subsistema de pensiones, ej: 240000)
-            - arlPaid (Número entero. El valor pagado a riesgos laborales ARL, ej: 25200)
-            - period (Periodo de cotización de los aportes en texto legible, ej: "Mayo de 2026", "Abril de 2026")
+            - totalPaid (Número entero. El valor total pagado en la planilla, ej: 585200 o 51600)
+            - saludPaid (Número entero. El valor pagado al subsistema de salud, ej: 180000 o 21900)
+            - pensionPaid (Número entero. El valor pagado al subsistema de pensiones, ej: 240000 o 28100)
+            - arlPaid (Número entero. El valor pagado a riesgos laborales ARL, ej: 25200 o 1000)
+            - ibc (Número entero. El Ingreso Base de Cotización IBC que figura en el detalle del aportante/afiliado, ej: 175091 o 1750910 o 1423500)
+            - days (Número entero. Los días cotizados reportados en la planilla, ej: 3, 28, 30)
+            - period (Periodo de cotización de los aportes en texto legible, ej: "Agosto de 2026", "Septiembre de 2026")
+            - periodCotizadoInicio (Fecha inicio de cotización o periodo servicio en formato DD - MM - YYYY o YYYY-MM-DD si aparece, ej: "28 - 08 - 2026" o "01 - 09 - 2026")
+            - periodCotizadoFin (Fecha fin de cotización o periodo servicio en formato DD - MM - YYYY o YYYY-MM-DD si aparece, ej: "30 - 08 - 2026" o "30 - 09 - 2026")
+            - paymentDate (Fecha en que se pagó la planilla, ej: "25/09/2026")
+            - interests (Número entero. Intereses de mora si aparecen, ej: 600)
         `;
 
         let result;
@@ -637,9 +643,19 @@ exports.generateObligationAnnexDescription = async ({
 
     try {
         const evidenceDetails = (evidences || []).map((ev, idx) => {
-            const name = ev.filename || `Soporte ${idx + 1}`;
+            let cleanName = ev.filename || `Soporte ${idx + 1}`;
+            if (cleanName.startsWith('evidence_') || cleanName.includes('-1790') || cleanName.includes('-1789')) {
+                const ext = path.extname(cleanName).toLowerCase();
+                if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+                    cleanName = `Registro fotográfico ${idx + 1}`;
+                } else if (ext === '.xlsx' || ext === '.xls') {
+                    cleanName = `Hoja de cálculo / Reporte de control ${idx + 1}`;
+                } else {
+                    cleanName = `Documento técnico / Soporte ${idx + 1}`;
+                }
+            }
             const desc = (ev.description || '').trim();
-            return `  - Elemento ${idx + 1} (${name}): ${desc ? desc : 'Sin descripción individual'}`;
+            return `  - Elemento ${idx + 1} (${cleanName}): ${desc ? desc : 'Sin descripción individual'}`;
         }).join('\n');
 
         const prompt = `
@@ -661,6 +677,7 @@ REGLAS ESTRICTAS DE REDACCIÓN:
 3. COHERENCIA TÉCNICA: Integra con naturalidad la información del resumen del contratista y los soportes reportados, justificando cómo cada labor contribuyó al cabal cumplimiento de la obligación contractual.
 4. ESTRUCTURA: Redacta en texto corrido, organizado en 1 o 2 párrafos bien redactados.
 5. FORMATO FINAL: Entrega ÚNICAMENTE el texto redactado en texto plano, sin comillas, sin viñetas, sin títulos, sin asteriscos (sin markdown) y sin mensajes introductorios (como "A continuación presento..." o "Aquí está...").
+6. NOMENCLATURA LIMPIA DE SOPORTES: NUNCA menciones nombres de archivo crudos, técnicos o con hashes como "evidence_0-179...pdf". Si mencionas documentos o imágenes, hazlo de forma profesional e institucional (ejemplos: "Conceptos técnicos emitidos", "Reportes de mantenimiento adjuntos", "Hojas de cálculo de control", "Registro fotográfico adjunto", "Soportes documentales en formato PDF").
 `;
 
         const result = await generateAIContent(prompt);

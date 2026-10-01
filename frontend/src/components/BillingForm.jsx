@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
-import { calculatePeriods, filterSpecificObligations } from '../utils/period.utils';
+import { calculatePeriods, filterSpecificObligations, determineActiveAct } from '../utils/period.utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     CheckCircle2, Upload, ChevronRight, ChevronLeft, FileText,
@@ -89,7 +89,18 @@ export default function BillingForm({ contract, onComplete }) {
     const [unlockingDoc, setUnlockingDoc] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
 
-    const [selectedAct, setSelectedAct] = useState(1);
+    const activeActInfo = React.useMemo(() => {
+        if (!contract) return { targetAct: 1, reason: '' };
+        return determineActiveAct(contract);
+    }, [contract]);
+
+    const [selectedAct, setSelectedAct] = useState(() => {
+        if (contract?.startDate) {
+            return determineActiveAct(contract).targetAct;
+        }
+        return 1;
+    });
+
     const [periodData, setPeriodData] = useState({
         periodFrom: '',
         periodTo: '',
@@ -105,6 +116,13 @@ export default function BillingForm({ contract, onComplete }) {
             contract.periodType || 'mes_cumplido',
             contract.endDate
         );
+    }, [contract]);
+
+    React.useEffect(() => {
+        if (contract?.startDate) {
+            const detected = determineActiveAct(contract).targetAct;
+            setSelectedAct(prev => (prev === 1 && detected !== 1 ? detected : prev));
+        }
     }, [contract]);
 
     React.useEffect(() => {
@@ -405,11 +423,28 @@ export default function BillingForm({ contract, onComplete }) {
                                     >
                                         {periodsList.map((p) => (
                                             <option key={p.actNumber} value={p.actNumber}>
-                                                Acta N° {p.actNumber} {p.isAddition ? '(Adición Contractual)' : '(Contrato Inicial)'} ({p.from} al {p.to})
+                                                Acta N° {p.actNumber} {p.isAddition ? '(Adición Contractual)' : '(Contrato Inicial)'} ({p.from} al {p.to}) {p.actNumber === activeActInfo.targetAct ? '★ [Periodo en Curso]' : ''}
                                             </option>
                                         ))}
                                     </select>
                                 </div>
+                                {activeActInfo?.reason && (
+                                    <div style={{
+                                        gridColumn: '1 / -1',
+                                        padding: '0.65rem 0.85rem',
+                                        background: 'rgba(59, 130, 246, 0.08)',
+                                        border: '1px solid rgba(59, 130, 246, 0.25)',
+                                        borderRadius: 'var(--radius-md)',
+                                        fontSize: '0.82rem',
+                                        color: 'var(--text-main)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.5rem'
+                                    }}>
+                                        <Clock size={15} color="var(--primary)" />
+                                        <span>{activeActInfo.reason}</span>
+                                    </div>
+                                )}
                                 <div className="form-group">
                                     <label className="label">Desde</label>
                                     <input type="date" className="input" readOnly value={periodData.periodFrom}

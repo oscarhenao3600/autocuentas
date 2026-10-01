@@ -166,3 +166,90 @@ export const getContractDurationText = (contract) => {
         return 'Por meses';
     }
 };
+
+/**
+ * Determina el número de acta activa (periodo actual para recolección de evidencias / trámite de cuenta)
+ * considerando:
+ * 1. Fecha de inicio del contrato y el tiempo calendario transcurrido a la fecha actual.
+ * 2. Si el periodo 1 ya venció (ej: inició el 28 de agosto y hoy es después del 30 de septiembre),
+ *    se asume que la Cuenta 1 ya fue radicada y el contratista inicia en el Acta 2 (Cuenta 2).
+ * 3. Si el periodo 1 aún está dentro de su ventana de vigencia (ej: inició el 13 de septiembre y
+ *    vence el 12 de octubre), se mantiene en el Acta 1 (Cuenta 1).
+ * 4. Historial previo en base de datos: si ya descargó el Acta N o fue completada, avanza al siguiente.
+ *
+ * @param {Object} contract - Contrato
+ * @param {Array} [existingPeriods=[]] - Periodos existentes en BD
+ * @param {Date|string} [currentDate=new Date()] - Fecha a evaluar
+ * @returns {Object} { targetAct, currentPeriod, periods, reason }
+ */
+export const determineActiveAct = (contract, existingPeriods = [], currentDate = new Date()) => {
+    if (!contract || !contract.startDate) {
+        return { targetAct: 1, currentPeriod: null, periods: [], reason: 'Contrato sin fecha de inicio definida' };
+    }
+
+    const periods = calculatePeriods(
+        contract.startDate,
+        contract.initialDurationMonths || 4,
+        contract.additionDurationMonths || 0,
+        contract.periodType || '30_dias',
+        contract.endDate
+    );
+
+    if (!periods || periods.length === 0) {
+        return { targetAct: 1, currentPeriod: null, periods: [], reason: 'No hay periodos calculados' };
+    }
+
+    const now = (currentDate instanceof Date) ? currentDate : new Date(currentDate);
+
+    // 1. Si ya tiene actas descargadas/completadas en el sistema, partir de maxDownloaded + 1
+    const downloadedPeriods = (existingPeriods || []).filter(p => p.zipDownloaded || p.status === 'completed');
+    let baseFromDb = 1;
+    if (downloadedPeriods.length > 0) {
+        baseFromDb = Math.max(...downloadedPeriods.map(p => p.actNumber)) + 1;
+    }
+
+    // 2. Determinar acta según calendario y fecha de inicio
+    let calendarAct = 1;
+    for (const p of periods) {
+        const rawTo = String(p.to).split('T')[0];
+        const [toY, toM, toD] = rawTo.split('-').map(Number);
+        const lastDayOfToMonth = new Date(toY, toM, 0).getDate();
+
+        // Si toD >= 20, el corte formal de radicación de la cuenta es el último día del mes (ej: 30 de septiembre).
+        // Si toD < 20, el corte es el mismo día de cierre del periodo de 30 días (ej: 12 de octubre).
+        let cutoffDate;
+        if (toD >= 20) {
+            cutoffDate = new Date(toY, toM - 1, lastDayOfToMonth, 23, 59, 59);
+        } else {
+            cutoffDate = new Date(toY, toM - 1, toD, 23, 59, 59);
+        }
+
+        if (now > cutoffDate) {
+            // Este periodo ya venció en el calendario
+            calendarAct = p.actNumber + 1;
+        } else {
+            // Encontró el periodo vigente
+            calendarAct = p.actNumber;
+            break;
+        }
+    }
+
+    // Garantizar que no exceda el número total de periodos
+    calendarAct = Math.min(calendarAct, periods.length);
+    const targetAct = Math.max(baseFromDb, calendarAct);
+    const currentPeriod = periods.find(p => p.actNumber === targetAct) || periods[periods.length - 1];
+
+    let reason = 'El contrato se encuentra dentro del plazo de vigencia del periodo actual.';
+    if (targetAct > 1) {
+        const startClean = String(contract.startDate).split('T')[0];
+        reason = `Por la fecha de inicio del contrato (${startClean}) y el tiempo transcurrido, el Acta ${targetAct - 1} ya finalizó. Se gestiona el Acta ${targetAct}.`;
+    }
+
+    return {
+        targetAct,
+        currentPeriod,
+        periods,
+        reason
+    };
+};
+

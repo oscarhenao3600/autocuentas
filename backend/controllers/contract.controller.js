@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const Contract = require('../models/Contract');
 const User = require('../models/User');
+const BillingPeriod = require('../models/BillingPeriod');
 const storageService = require('../services/storage.service');
 const { 
     extractContractData, 
@@ -11,7 +12,7 @@ const {
     extractRutData, 
     extractSecuritySocialData 
 } = require('../services/gemini.service');
-const { filterSpecificObligations } = require('../utils/period.utils');
+const { filterSpecificObligations, determineActiveAct } = require('../utils/period.utils');
 const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
 const resolveContract = async (userId, contractId = null) => {
@@ -31,7 +32,17 @@ const getContractorFolder = (contract, user) => {
 exports.listMyContracts = async (req, res) => {
     try {
         const contracts = await Contract.find({ user: req.user._id }).sort({ createdAt: -1 });
-        res.json(contracts);
+        const enriched = await Promise.all(contracts.map(async (c) => {
+            const contractObj = c.toObject();
+            try {
+                const userPeriods = await BillingPeriod.find({ contract: c._id });
+                const activeInfo = determineActiveAct(contractObj, userPeriods);
+                contractObj.activePeriodInfo = activeInfo;
+                contractObj.activeAct = activeInfo.targetAct;
+            } catch (_) {}
+            return contractObj;
+        }));
+        res.json(enriched);
     } catch (error) {
         res.status(500).json({ message: 'Error al listar contratos', error: error.message });
     }
@@ -111,7 +122,14 @@ exports.getContract = async (req, res) => {
         const contractId = req.params.id || req.query.contractId;
         const contract = await resolveContract(req.user._id, contractId);
         if (!contract) return res.status(404).json({ message: 'No se encontró información de contrato' });
-        res.json(contract);
+        const contractObj = contract.toObject();
+        try {
+            const userPeriods = await BillingPeriod.find({ contract: contract._id });
+            const activeInfo = determineActiveAct(contractObj, userPeriods);
+            contractObj.activePeriodInfo = activeInfo;
+            contractObj.activeAct = activeInfo.targetAct;
+        } catch (_) {}
+        res.json(contractObj);
     } catch (error) {
         res.status(500).json({ message: 'Error al obtener contrato', error: error.message });
     }

@@ -202,10 +202,250 @@ const getContractDurationText = (contract) => {
     }
 };
 
+const MONTHS_SPANISH = [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+];
+
+/**
+ * Calcula y liquida los aportes de Seguridad Social respetando la normativa PILA en Colombia:
+ * - Redondeo legal a la centena superior (Math.ceil a múltiplos de 100).
+ * - Prorrateo estricto por días laborados en el mes inicial si el contrato inicia a mitad de mes.
+ * - Liquidación mensual completa (30 días) para la Cuenta 2 y periodos ordinarios.
+ * - Prioridad absoluta a los valores reales de la planilla si el usuario la cargó.
+ */
+const calculateSocialSecurity = (contract, period = {}, uploadedSS = {}) => {
+    const defaultSmmlv = parseInt(process.env.SMMLV || '1750910', 10);
+    const smmlv = Number(contract?.smmlv || defaultSmmlv);
+    const monthlyVal = parseFloat(contract?.monthlyValue || 0);
+    const actNum = Number(period?.actNumber || 1);
+
+    // 1. Si el usuario subió planilla y contiene valores reales, priorizarlos
+    const rawIbc = Number(uploadedSS?.ibc || period?.securitySocial?.ibc || 0);
+    const rawSalud = Number(uploadedSS?.saludPaid || period?.securitySocial?.saludPaid || 0);
+    const rawPension = Number(uploadedSS?.pensionPaid || period?.securitySocial?.pensionPaid || 0);
+    const rawArl = Number(uploadedSS?.arlPaid || period?.securitySocial?.arlPaid || 0);
+    const rawTotal = Number(uploadedSS?.totalPaid || period?.securitySocial?.totalPaid || 0);
+
+    const hasRealUploadedData = rawSalud > 0 || rawPension > 0 || rawIbc > 0 || rawTotal > 0;
+
+    if (hasRealUploadedData) {
+        const computedIbc = rawIbc > 0 ? rawIbc : (
+            rawSalud > 0 ? Math.round(rawSalud / 0.125) : (
+                rawPension > 0 ? Math.round(rawPension / 0.16) : smmlv
+            )
+        );
+        const computedSalud = rawSalud > 0 ? rawSalud : Math.ceil((computedIbc * 0.125) / 100) * 100;
+        const computedPension = rawPension > 0 ? rawPension : Math.ceil((computedIbc * 0.16) / 100) * 100;
+        const computedArl = rawArl > 0 ? rawArl : Math.max(1000, Math.ceil((computedIbc * 0.00522) / 100) * 100);
+        const subtotal = computedSalud + computedPension + computedArl;
+        const finalTotal = rawTotal > 0 ? rawTotal : subtotal;
+
+        return {
+            operator: uploadedSS?.operator || period?.securitySocial?.operator || 'SIMPLE',
+            planillaNumber: uploadedSS?.planillaNumber || period?.securitySocial?.planillaNumber || '',
+            ibc: computedIbc,
+            days: Number(uploadedSS?.days || period?.securitySocial?.days || (actNum === 1 ? 3 : 30)),
+            saludPaid: computedSalud,
+            pensionPaid: computedPension,
+            arlPaid: computedArl,
+            totalPaid: finalTotal,
+            interests: Number(uploadedSS?.interests || period?.securitySocial?.interests || 0),
+            paymentDate: uploadedSS?.paymentDate || period?.securitySocial?.paymentDate || '',
+            period: uploadedSS?.period || period?.securitySocial?.period || '',
+            periodCotizadoInicio: uploadedSS?.periodCotizadoInicio || period?.securitySocial?.periodCotizadoInicio || '',
+            periodCotizadoFin: uploadedSS?.periodCotizadoFin || period?.securitySocial?.periodCotizadoFin || ''
+        };
+    }
+
+    // 2. Liquidación teórica automática
+    let startDateObj = null;
+    if (contract?.startDate) {
+        const rawDate = String(contract.startDate).split('T')[0];
+        const [y, m, d] = rawDate.split('-').map(Number);
+        if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+            startDateObj = new Date(y, m - 1, d);
+        }
+    }
+
+    const isFirstAct = actNum === 1;
+    const isMidMonthStart = startDateObj && startDateObj.getDate() > 1;
+
+    let days = 30;
+    let ibc = 0;
+    let periodCotizadoInicio = '';
+    let periodCotizadoFin = '';
+    let periodName = '';
+
+    if (isFirstAct && isMidMonthStart) {
+        // Cuenta 1 con inicio a mitad de mes (ej: 28 de agosto -> 3 días)
+        const startDay = startDateObj.getDate();
+        // Mes comercial de 30 días en PILA: días = 30 - startDay + 1
+        days = Math.max(1, 30 - startDay + 1);
+        
+        // IBC proporcional al salario mínimo base por los días laborados
+        const dailyMin = smmlv / 30;
+        const proportionalMinIbc = Math.round(dailyMin * days);
+        const proportionalContractIbc = Math.round(((monthlyVal * 0.4) / 30) * days);
+
+        ibc = Math.max(proportionalMinIbc, proportionalContractIbc);
+
+        const pad = (n) => String(n).padStart(2, '0');
+        const startMonth = startDateObj.getMonth() + 1;
+        const startYear = startDateObj.getFullYear();
+
+        periodCotizadoInicio = `${pad(startDay)} - ${pad(startMonth)} - ${startYear}`;
+        periodCotizadoFin = `30 - ${pad(startMonth)} - ${startYear}`;
+        periodName = `${MONTHS_SPANISH[startDateObj.getMonth()]} de ${startYear}`;
+    } else {
+        // Cuenta 2 en adelante o contratos iniciados el día 1 (mes completo de 30 días)
+        days = 30;
+        const fullForty = Math.round(monthlyVal * 0.4);
+        ibc = Math.max(fullForty, smmlv);
+
+        // Para Cuenta 2 (y subsecuentes), la planilla cotizada corresponde al mes de labores concluido
+        let cotizedMonthIndex = 0;
+        let cotizedYear = 2026;
+
+        if (period?.periodFrom) {
+            const rawFrom = String(period.periodFrom).split('T')[0];
+            const [fy, fm] = rawFrom.split('-').map(Number);
+            if (!isNaN(fy) && !isNaN(fm)) {
+                // El mes de labores que se paga
+                cotizedMonthIndex = fm - 1; // 0-based
+                cotizedYear = fy;
+            }
+        } else if (startDateObj) {
+            // Estimar mes según número de acta
+            const baseMonth = startDateObj.getMonth() + (actNum - 1);
+            cotizedMonthIndex = baseMonth % 12;
+            cotizedYear = startDateObj.getFullYear() + Math.floor(baseMonth / 12);
+        }
+
+        const pad = (n) => String(n).padStart(2, '0');
+        const mNum = pad(cotizedMonthIndex + 1);
+
+        periodCotizadoInicio = `01 - ${mNum} - ${cotizedYear}`;
+        periodCotizadoFin = `30 - ${mNum} - ${cotizedYear}`;
+        periodName = `${MONTHS_SPANISH[cotizedMonthIndex]} de ${cotizedYear}`;
+    }
+
+    // Tarifas y redondeo PILA a la centena superior
+    const saludPaid = Math.ceil((ibc * 0.125) / 100) * 100;
+    const pensionPaid = Math.ceil((ibc * 0.16) / 100) * 100;
+    const arlPaid = Math.max(1000, Math.ceil((ibc * 0.00522) / 100) * 100);
+    const totalPaid = saludPaid + pensionPaid + arlPaid;
+
+    return {
+        operator: 'SIMPLE',
+        planillaNumber: '',
+        ibc,
+        days,
+        saludPaid,
+        pensionPaid,
+        arlPaid,
+        totalPaid,
+        interests: 0,
+        paymentDate: '',
+        period: periodName,
+        periodCotizadoInicio,
+        periodCotizadoFin
+    };
+};
+
+/**
+ * Determina el número de acta activa (periodo actual para recolección de evidencias / trámite de cuenta)
+ * considerando:
+ * 1. Fecha de inicio del contrato y el tiempo calendario transcurrido a la fecha actual.
+ * 2. Si el periodo 1 ya venció (ej: inició el 28 de agosto y hoy es después del 30 de septiembre),
+ *    se asume que la Cuenta 1 ya fue radicada y el contratista inicia en el Acta 2 (Cuenta 2).
+ * 3. Si el periodo 1 aún está dentro de su ventana de vigencia (ej: inició el 13 de septiembre y
+ *    vence el 12 de octubre), se mantiene en el Acta 1 (Cuenta 1).
+ * 4. Historial previo en base de datos: si ya descargó el Acta N o fue completada, avanza al siguiente.
+ *
+ * @param {Object} contract - Contrato
+ * @param {Array} [existingPeriods=[]] - Periodos existentes en BD
+ * @param {Date|string} [currentDate=new Date()] - Fecha a evaluar
+ * @returns {Object} { targetAct, currentPeriod, periods, reason }
+ */
+const determineActiveAct = (contract, existingPeriods = [], currentDate = new Date()) => {
+    if (!contract || !contract.startDate) {
+        return { targetAct: 1, currentPeriod: null, periods: [], reason: 'Contrato sin fecha de inicio definida' };
+    }
+
+    const periods = calculatePeriods(
+        contract.startDate,
+        contract.initialDurationMonths || 4,
+        contract.additionDurationMonths || 0,
+        contract.periodType || '30_dias',
+        contract.endDate
+    );
+
+    if (!periods || periods.length === 0) {
+        return { targetAct: 1, currentPeriod: null, periods: [], reason: 'No hay periodos calculados' };
+    }
+
+    const now = (currentDate instanceof Date) ? currentDate : new Date(currentDate);
+
+    // 1. Si ya tiene actas descargadas/completadas en el sistema, partir de maxDownloaded + 1
+    const downloadedPeriods = (existingPeriods || []).filter(p => p.zipDownloaded || p.status === 'completed');
+    let baseFromDb = 1;
+    if (downloadedPeriods.length > 0) {
+        baseFromDb = Math.max(...downloadedPeriods.map(p => p.actNumber)) + 1;
+    }
+
+    // 2. Determinar acta según calendario y fecha de inicio
+    let calendarAct = 1;
+    for (const p of periods) {
+        const rawTo = String(p.to).split('T')[0];
+        const [toY, toM, toD] = rawTo.split('-').map(Number);
+        const lastDayOfToMonth = new Date(toY, toM, 0).getDate();
+
+        // Si toD >= 20, el corte formal de radicación de la cuenta es el último día del mes (ej: 30 de septiembre).
+        // Si toD < 20, el corte es el mismo día de cierre del periodo de 30 días (ej: 12 de octubre).
+        let cutoffDate;
+        if (toD >= 20) {
+            cutoffDate = new Date(toY, toM - 1, lastDayOfToMonth, 23, 59, 59);
+        } else {
+            cutoffDate = new Date(toY, toM - 1, toD, 23, 59, 59);
+        }
+
+        if (now > cutoffDate) {
+            // Este periodo ya venció en el calendario
+            calendarAct = p.actNumber + 1;
+        } else {
+            // Encontró el periodo vigente
+            calendarAct = p.actNumber;
+            break;
+        }
+    }
+
+    // Garantizar que no exceda el número total de periodos
+    calendarAct = Math.min(calendarAct, periods.length);
+    const targetAct = Math.max(baseFromDb, calendarAct);
+    const currentPeriod = periods.find(p => p.actNumber === targetAct) || periods[periods.length - 1];
+
+    let reason = 'El contrato se encuentra dentro del plazo de vigencia del periodo actual.';
+    if (targetAct > 1) {
+        const startClean = String(contract.startDate).split('T')[0];
+        reason = `Por la fecha de inicio del contrato (${startClean}) y el tiempo transcurrido, el Acta ${targetAct - 1} ya finalizó. Se gestiona el Acta ${targetAct}.`;
+    }
+
+    return {
+        targetAct,
+        currentPeriod,
+        periods,
+        reason
+    };
+};
+
 module.exports = {
     calculatePeriods,
+    calculateSocialSecurity,
+    determineActiveAct,
     isGeneralObligation,
     filterSpecificObligations,
     formatDateStr,
     getContractDurationText
 };
+

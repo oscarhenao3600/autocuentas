@@ -8,6 +8,7 @@ const { createBillingZip } = require('../services/archive.service');
 const { extractSecuritySocialData, improveEvidenceText, generateObligationAnnexDescription, generateExecutionEvidencesSummary } = require('../services/gemini.service');
 const annexService = require('../services/annex.service');
 const storageService = require('../services/storage.service');
+const { calculateSocialSecurity } = require('../utils/period.utils');
 
 // ──────────────────────────────────────────────────────────────
 // Helper: Calculate IBC (Ingreso Base de Cotización)
@@ -306,8 +307,9 @@ const generateBillingPackage = async (periodId, userId) => {
     const user = await User.findById(userId).select('-password');
     if (!user) throw new Error('Usuario no encontrado');
 
-        // ── Compute IBC ──────────────────────────────────────────
-        const ibc = calcIbc(contract.monthlyValue);
+        // ── Compute Social Security and IBC with PILA compliance ──
+        const ssData = calculateSocialSecurity(contract, period, period.securitySocial);
+        const ibc = ssData.ibc;
         contract.ibcValue = ibc;
         await contract.save();
 
@@ -381,19 +383,12 @@ const generateBillingPackage = async (periodId, userId) => {
         const remainingValFormatted = remainingVal.toLocaleString('es-CO');
 
         // Security Social values formatting with intelligent fallbacks
-        let ssOperator = period.securitySocial?.operator || 'SIMPLE';
-        let ssPlanilla = period.securitySocial?.planillaNumber || '';
-        let rawSalud = Number(period.securitySocial?.saludPaid || 0);
-        let rawPension = Number(period.securitySocial?.pensionPaid || 0);
-        let rawArl = Number(period.securitySocial?.arlPaid || 0);
-        let rawTotalSS = Number(period.securitySocial?.totalPaid || 0);
-
-        if (rawTotalSS === 0) {
-            rawSalud = Math.round(ibc * 0.125);
-            rawPension = Math.round(ibc * 0.16);
-            rawArl = Math.round(ibc * 0.00522);
-            rawTotalSS = rawSalud + rawPension + rawArl;
-        }
+        const ssOperator = ssData.operator || period.securitySocial?.operator || 'SIMPLE';
+        const ssPlanilla = ssData.planillaNumber || period.securitySocial?.planillaNumber || '';
+        const rawSalud = Number(ssData.saludPaid || 0);
+        const rawPension = Number(ssData.pensionPaid || 0);
+        const rawArl = Number(ssData.arlPaid || 0);
+        const rawTotalSS = Number(ssData.totalPaid || (rawSalud + rawPension + rawArl));
 
         const saludValFormatted = rawSalud.toLocaleString('es-CO');
         const pensionValFormatted = rawPension.toLocaleString('es-CO');
@@ -402,7 +397,7 @@ const generateBillingPackage = async (periodId, userId) => {
 
         // Tax / Retención options
         const takesCosts = !!contract.takesCosts;
-        const takesExemptRent = contract.takesExemptRent !== false;
+        const takesExemptRent = contract.takesExemptRent === true;
         const isTaxFiler = !!contract.isTaxFiler;
         const previousTaxYear = (parseInt(anio, 10) - 1).toString();
 
@@ -442,9 +437,11 @@ const generateBillingPackage = async (periodId, userId) => {
             plazoEjecucionText += ` MÁS ADICIÓN DE ${contract.additionDuration}`;
         }
 
-        const periodToDateObj = parseDateSafe(period.periodTo);
-        const actaParcialDia = periodToDateObj ? String(periodToDateObj.getDate()).padStart(2, '0') : '';
-        const actaParcialMesNum = periodToDateObj ? String(periodToDateObj.getMonth() + 1).padStart(2, '0') : '';
+        const periodToDateObj = parseDateSafe(period.periodTo) || new Date();
+        const lastDayOfMonth = new Date(periodToDateObj.getFullYear(), periodToDateObj.getMonth() + 1, 0).getDate();
+        const actaParcialDia = String(lastDayOfMonth).padStart(2, '0');
+        const actaParcialMesNum = String(periodToDateObj.getMonth() + 1).padStart(2, '0');
+        const fechaCorteSign = `${actaParcialDia} - ${actaParcialMesNum} - ${periodToDateObj.getFullYear()}`;
 
         // Generar texto formal de resumen de evidencias para el Informe de Actividades con IA
         let evidenciasEjecucionTexto;
@@ -474,12 +471,12 @@ const generateBillingPackage = async (periodId, userId) => {
 
         const commonData = {
             // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
-            fecha_certificado:                 formatDateNumeric(period.periodTo),
+            fecha_certificado:                 fechaCorteSign,
             nombre_supervisor:                 contract.supervisorName || '',
             dependencia:                       contract.supervisorDependency || 'Secretaría de Planeación',
             nombre_contratista:                contract.contractorName || user.fullName || '',
             identificacion_contratista:        contract.idNumber || '',
-            tipo_contrato:                     contract.contractType || 'Prestación de Servicios Profesionales',
+            tipo_contrato:                     contract.contractType || 'PRESTACIÓN DE SERVICIOS DE APOYO A LA GESTION',
             numero_contrato:                   contract.contractNumber || '',
             fecha_acta_inicio:                 contract.startDate ? formatDateEs(contract.startDate) : '',
             fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateEs(contract.additionEndDate) : (effectiveEndDate ? formatDateEs(effectiveEndDate) : ''),
@@ -494,8 +491,8 @@ const generateBillingPackage = async (periodId, userId) => {
             forma_pago:                        formaPagoText,
             periodo_pagar_inicio:              formatDateNumeric(period.periodFrom),
             periodo_pagar_fin:                 formatDateNumeric(period.periodTo),
-            mes_planilla:                      period.securitySocial?.period || mes,
-            numero_planilla:                   period.securitySocial?.planillaNumber || '',
+            mes_planilla:                      ssData.period || mes,
+            numero_planilla:                   ssPlanilla,
             valor_pension:                     pensionValFormatted,
             valor_salud:                       saludValFormatted,
             valor_arl:                         arlValFormatted,
@@ -503,24 +500,26 @@ const generateBillingPackage = async (periodId, userId) => {
             soporte_acta_inicio_folios:        period.actNumber === 1 ? "1" : "0",
             soporte_informe_contratista_folios: "2",
             soporte_informe_supervisor_folios:  "1",
-            soportes_otros:                    "Planilla de Seguridad Social, RUT, Certificación Bancaria",
-            chk_anticipo:                      "[   ]",
-            chk_primero:                       period.actNumber === 1 ? "[ X ]" : "[   ]",
-            chk_segundo:                       period.actNumber === 2 ? "[ X ]" : "[   ]",
-            chk_tercero:                       period.actNumber === 3 ? "[ X ]" : "[   ]",
-            chk_cuarto:                        period.actNumber === 4 ? "[ X ]" : "[   ]",
-            chk_quinto:                        period.actNumber === 5 ? "[ X ]" : "[   ]",
-            chk_sexto:                         period.actNumber === 6 ? "[ X ]" : "[   ]",
-            chk_septimo:                       period.actNumber === 7 ? "[ X ]" : "[   ]",
-            chk_octavo:                        period.actNumber === 8 ? "[ X ]" : "[   ]",
-            chk_noveno:                        period.actNumber === 9 ? "[ X ]" : "[   ]",
-            chk_otros:                         period.actNumber > 9 ? "[ X ]" : "[   ]",
+            soporte_planilla_folios:           "1",
+            soporte_recibo_folios:             "1",
+            soportes_otros:                    "Planilla de Seguridad Social: 1 folio(s).\nRecibo de pago: 1 folio(s)\nRUT: 1 folio(s)\nCertificación Bancaria: 1 folio(s)\nDescuento de Estampillas 1 folio(s)\nRetención en la Fuente: 1 folio(s)\nRP: 1 folio(s)",
+            chk_anticipo:                      "___",
+            chk_primero:                       period.actNumber === 1 ? "_ X _" : "___",
+            chk_segundo:                       period.actNumber === 2 ? "_ X _" : "___",
+            chk_tercero:                       period.actNumber === 3 ? "_ X _" : "___",
+            chk_cuarto:                        period.actNumber === 4 ? "_ X _" : "___",
+            chk_quinto:                        period.actNumber === 5 ? "_ X _" : "___",
+            chk_sexto:                         period.actNumber === 6 ? "_ X _" : "___",
+            chk_septimo:                       period.actNumber === 7 ? "_ X _" : "___",
+            chk_octavo:                        period.actNumber === 8 ? "_ X _" : "___",
+            chk_noveno:                        period.actNumber === 9 ? "_ X _" : "___",
+            chk_otros:                         period.actNumber > 9 ? "_ X _" : "___",
             otros_cual:                        period.actNumber > 9 ? (ACT_TEXTS[period.actNumber] || `PAGO ${period.actNumber}`) : "",
 
             // ── NUEVAS VARIABLES (snake_case) para INFORME DE ACTIVIDADES ──
             objeto_contrato:                   contract.contractObject || '',
             plazo_ejecucion:                   plazoEjecucionText,
-            acta_parcial_anio:                 anio,
+            acta_parcial_anio:                 periodToDateObj.getFullYear().toString(),
             acta_parcial_mes:                  actaParcialMesNum,
             acta_parcial_dia:                  actaParcialDia,
             numero_acta_parcial:               period.actNumber.toString(),
@@ -538,19 +537,23 @@ const generateBillingPackage = async (periodId, userId) => {
             otros_contratos_no:                "[ X ]",
             valor_ingresos_mensualizados:      monthlyValFormatted,
             valor_ibc:                         ibc.toLocaleString('es-CO'),
-            entidad_pago_aportes:              period.securitySocial?.operator || 'SIMPLE',
+            entidad_pago_aportes:              ssOperator,
             valor_total_aporte:                ssTotalFormatted,
-            numero_recibo_aportes:             period.securitySocial?.planillaNumber || '',
-            periodo_cotizado_inicio:           formatDateNumeric(period.periodFrom),
-            periodo_cotizado_fin:              formatDateNumeric(period.periodTo),
+            numero_recibo_aportes:             ssPlanilla,
+            periodo_cotizado_inicio:           ssData.periodCotizadoInicio || formatDateNumeric(period.periodFrom),
+            periodo_cotizado_fin:              ssData.periodCotizadoFin || formatDateNumeric(period.periodTo),
             chk_recibo_pago_ss:                "[ X ]",
             chk_copias_planillas:              "[ X ]",
             chk_anexos_otros:                  "[   ]",
-            observaciones:                     period.observations || "NINGUNA",
+            observaciones:                     period.observations ? period.observations : "(Este espacio es para que el Supervisor (a) realice las anotaciones del caso, respecto del avance de ejecución del contrato, y en general, todas aquellas que pretenda hacer valer respecto del cumplimiento de las obligaciones pactadas con el contratista).",
             firma_supervisor:                  contract.supervisorName || '',
 
             // ── NUEVAS VARIABLES (snake_case) para DESCUENTO DE ESTAMPILLAS ──
-            ciudad_fecha:                      `Armenia, ${formatDateEs(period.periodTo)}`,
+            ciudad_fecha_estampillas:          `${contract.idCity || 'Armenia'} Quindío, ${mes.toLowerCase()} de ${anio}`,
+            cedula_expedicion_larga:           `${contract.idNumber || ''} de ${contract.idCity || 'Armenia'}- Quindío`,
+            direccion_telefono_contratista:    `${contract.contractorAddress || ''} ${contract.idCity || 'Armenia'} -Quindío Teléfono: ${contract.contractorPhone || ''}`,
+            especificar_contrato_estampillas:  `${(contract.contractType || 'PRESTACIÓN DE SERVICIOS DE APOYO A LA GESTION').toUpperCase()}   ${contract.contractNumber || ''}`,
+            ciudad_fecha:                      `${contract.idCity || 'Armenia'} Quindío, ${mes.toLowerCase()} de ${anio}`,
             direccion_contratista:             contract.contractorAddress || '',
             telefono_contratista:              contract.contractorPhone || '',
             chk_estampilla_pro_desarrollo:     "[ X ]",
@@ -566,7 +569,7 @@ const generateBillingPackage = async (periodId, userId) => {
             chk_contrato_otro:                 chkOtro,
             tipo_contrato_otro_cual:           isOtro ? (contract.contractType || '') : '',
             firma_contratista:                 contract.contractorName || user.fullName || '',
-            lugar_expedicion_cc:               contract.idCity || 'Armenia',
+            lugar_expedicion_cc:               contract.idCity || 'Armenia-Quindío',
 
             // ── NUEVAS VARIABLES (snake_case) para RETENCION EN LA FUENTE ──
             mes_documento:                     mes.toLowerCase(),

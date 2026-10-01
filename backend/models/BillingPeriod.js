@@ -86,6 +86,30 @@ const billingPeriodSchema = new mongoose.Schema({
         period: {
             type: String,
             default: ""
+        },
+        ibc: {
+            type: Number,
+            default: 0
+        },
+        days: {
+            type: Number,
+            default: 30
+        },
+        periodCotizadoInicio: {
+            type: String,
+            default: ""
+        },
+        periodCotizadoFin: {
+            type: String,
+            default: ""
+        },
+        paymentDate: {
+            type: String,
+            default: ""
+        },
+        interests: {
+            type: Number,
+            default: 0
         }
     },
     status: {

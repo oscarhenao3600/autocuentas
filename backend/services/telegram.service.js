@@ -9,7 +9,7 @@ const PaymentReceipt = require('../models/PaymentReceipt');
 const geminiService = require('./gemini.service');
 const storageService = require('./storage.service');
 const { generateBillingPackage } = require('../controllers/billing.controller');
-const { calculatePeriods, filterSpecificObligations, isGeneralObligation, getContractDurationText } = require('../utils/period.utils');
+const { calculatePeriods, determineActiveAct, filterSpecificObligations, isGeneralObligation, getContractDurationText } = require('../utils/period.utils');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let lastUpdateId = 0;
@@ -597,43 +597,29 @@ const checkAndAdvancePaymentStatus = async (user, contract) => {
 };
 
 /**
- * Resolves the current target act for a contract based on download status and periodTo
+ * Resolves the current target act for a contract based on contract start date, elapsed calendar time, and download status
  */
 const getContractCurrentActiveAct = async (userId, contractId, contract) => {
     try {
         await checkAndAdvancePaymentStatus({ _id: userId }, contract);
-
-        const periods = calculatePeriods(
-            contract.startDate,
-            contract.initialDurationMonths || 4,
-            contract.additionDurationMonths || 0,
-            contract.periodType || 'mes_cumplido',
-            contract.endDate
-        );
 
         const existingPeriods = await BillingPeriod.find({
             user: userId,
             contract: contractId
         }).sort({ actNumber: 1 });
 
-        const downloadedPeriods = existingPeriods.filter(p => p.zipDownloaded);
-        let targetAct = 1;
+        const activeResult = determineActiveAct(contract, existingPeriods, new Date());
+        const targetAct = activeResult.targetAct;
+        const periods = activeResult.periods;
+        const currentPeriod = existingPeriods.find(p => p.actNumber === targetAct) || activeResult.currentPeriod || null;
 
-        if (downloadedPeriods.length > 0) {
-            const maxDownloaded = Math.max(...downloadedPeriods.map(p => p.actNumber));
-            const lastDownloaded = downloadedPeriods.find(p => p.actNumber === maxDownloaded);
-            const now = new Date();
-            const periodTo = lastDownloaded?.periodTo ? new Date(lastDownloaded.periodTo) : now;
-
-            if (now >= periodTo || lastDownloaded?.zipDownloaded) {
-                targetAct = maxDownloaded + 1;
-            } else {
-                targetAct = maxDownloaded;
-            }
-        }
-
-        const currentPeriod = existingPeriods.find(p => p.actNumber === targetAct) || null;
-        return { targetAct, currentPeriod, existingPeriods, periods };
+        return {
+            targetAct,
+            currentPeriod,
+            existingPeriods,
+            periods,
+            reason: activeResult.reason
+        };
     } catch (err) {
         console.error('Error en getContractCurrentActiveAct:', err);
         return { targetAct: 1, currentPeriod: null, existingPeriods: [], periods: [] };
