@@ -5,6 +5,7 @@ const {
     updateAccountStatus, 
     uploadTemplate, 
     getTemplates, 
+    downloadTemplate,
     deleteTemplate,
     getRegisteredContractors,
     createContractor,
@@ -37,6 +38,7 @@ router.delete('/documents', protect, admin, deleteDocument);
 router.get('/accounts', protect, admin, getAllAccounts);
 router.put('/accounts/:id/status', protect, admin, updateAccountStatus);
 router.get('/templates', protect, admin, getTemplates);
+router.get('/templates/:filename/download', protect, admin, downloadTemplate);
 router.post('/template', protect, admin, upload.any(), uploadTemplate);
 router.delete('/templates/:filename', protect, admin, deleteTemplate);
 

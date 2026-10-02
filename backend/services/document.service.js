@@ -3,6 +3,7 @@ const Docxtemplater = require("docxtemplater");
 const ImageModule = require("docxtemplater-image-module-free");
 const fs = require("fs");
 const path = require("path");
+const templateService = require("./template.service");
 
 /**
  * Calculates moderate dimensions for images while strictly preserving aspect ratio
@@ -42,9 +43,8 @@ function getModerateImageSize(buffer) {
 
 exports.generateDocument = async (templateName, data) => {
     try {
-        const templatePath = path.resolve(__dirname, "..", "templates", templateName);
-        const content = fs.readFileSync(templatePath, "binary");
-        const zip = new PizZip(content);
+        const templateBuffer = await templateService.getTemplateBuffer(templateName);
+        const zip = new PizZip(templateBuffer);
         const docXml = zip.file("word/document.xml");
         let xmlText = docXml ? docXml.asText() : "";
         const hasDoubleBraces = /\{\{[^{}]+\}\}/.test(xmlText);

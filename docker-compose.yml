@@ -44,7 +44,7 @@ services:
     volumes:
       - backend_uploads:/app/uploads
       - backend_generated:/app/generated
-      - backend_templates:/app/templates
+      - ./backend/templates:/app/templates
     restart: unless-stopped
     logging: *default-logging
     healthcheck:
@@ -77,4 +77,3 @@ volumes:
   mongodb_data:
   backend_uploads:
   backend_generated:
-  backend_templates:

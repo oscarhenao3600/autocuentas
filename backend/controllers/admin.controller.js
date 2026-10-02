@@ -8,6 +8,7 @@ const TelegramPrivilege = require('../models/TelegramPrivilege');
 const PaymentConfig = require('../models/PaymentConfig');
 const PaymentReceipt = require('../models/PaymentReceipt');
 const storageService = require('../services/storage.service');
+const templateService = require('../services/template.service');
 
 const TEMPLATES_DIR = path.resolve(__dirname, '..', 'templates');
 
@@ -168,27 +169,10 @@ exports.updateAccountStatus = async (req, res) => {
     }
 };
 
-// GET /api/admin/templates → List active templates in templates folder
+// GET /api/admin/templates → List active templates in templates folder and Google Drive
 exports.getTemplates = async (req, res) => {
     try {
-        if (!fs.existsSync(TEMPLATES_DIR)) {
-            fs.mkdirSync(TEMPLATES_DIR, { recursive: true });
-            return res.json([]);
-        }
-
-        const files = fs.readdirSync(TEMPLATES_DIR);
-        const templates = files
-            .filter(f => !f.startsWith('.') && !f.endsWith('.bak'))
-            .map(filename => {
-                const filePath = path.join(TEMPLATES_DIR, filename);
-                const stats = fs.statSync(filePath);
-                return {
-                    name: filename,
-                    size: stats.size,
-                    modifiedAt: stats.mtime
-                };
-            });
-
+        const templates = await templateService.listTemplates();
         res.json(templates);
     } catch (error) {
         res.status(500).json({ message: 'Error al listar plantillas', error: error.message });
@@ -204,34 +188,15 @@ exports.uploadTemplate = async (req, res) => {
             return res.status(400).json({ message: 'Por favor selecciona al menos un archivo de plantilla' });
         }
 
-        if (!fs.existsSync(TEMPLATES_DIR)) {
-            fs.mkdirSync(TEMPLATES_DIR, { recursive: true });
-        }
-
         const savedFiles = [];
 
         for (const file of rawFiles) {
-            const canonicalName = getCanonicalTemplateName(file.originalname);
-            const targetPath = path.join(TEMPLATES_DIR, canonicalName);
-
-            // Copy/Write uploaded file to templates directory (supports memoryStorage and diskStorage)
-            if (file.buffer) {
-                fs.writeFileSync(targetPath, file.buffer);
-            } else if (file.path && fs.existsSync(file.path)) {
-                fs.copyFileSync(file.path, targetPath);
-            } else {
+            const buffer = file.buffer || (file.path && fs.existsSync(file.path) ? fs.readFileSync(file.path) : null);
+            if (!buffer) {
                 throw new Error(`No se pudo leer el contenido del archivo ${file.originalname}`);
             }
 
-            // If the original name was different from canonical name, save original as well
-            if (canonicalName !== file.originalname) {
-                const originalTargetPath = path.join(TEMPLATES_DIR, file.originalname);
-                if (file.buffer) {
-                    fs.writeFileSync(originalTargetPath, file.buffer);
-                } else if (file.path && fs.existsSync(file.path)) {
-                    fs.copyFileSync(file.path, originalTargetPath);
-                }
-            }
+            const saved = await templateService.saveTemplate(buffer, file.originalname);
 
             // Remove temp uploaded file if exists on disk
             try {
@@ -242,13 +207,15 @@ exports.uploadTemplate = async (req, res) => {
 
             savedFiles.push({
                 originalName: file.originalname,
-                savedAs: canonicalName,
-                size: file.size || (file.buffer ? file.buffer.length : 0)
+                savedAs: saved.name,
+                size: saved.size,
+                driveId: saved.driveId,
+                webViewLink: saved.webViewLink
             });
         }
 
         res.json({
-            message: `${savedFiles.length} plantilla(s) subida(s) y guardada(s) con éxito en el servidor`,
+            message: `${savedFiles.length} plantilla(s) sincronizada(s) con éxito en Google Drive y servidor local`,
             savedFiles
         });
     } catch (error) {
@@ -257,17 +224,29 @@ exports.uploadTemplate = async (req, res) => {
     }
 };
 
+// GET /api/admin/templates/:filename/download → Download template document
+exports.downloadTemplate = async (req, res) => {
+    try {
+        const filename = path.basename(req.params.filename);
+        const buffer = await templateService.getTemplateBuffer(filename);
+        if (!buffer) {
+            return res.status(404).json({ message: `Plantilla "${filename}" no encontrada` });
+        }
+
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.send(buffer);
+    } catch (error) {
+        console.error('Error al descargar plantilla:', error);
+        res.status(500).json({ message: 'Error al descargar plantilla', error: error.message });
+    }
+};
+
 // DELETE /api/admin/templates/:filename → Delete template
 exports.deleteTemplate = async (req, res) => {
     try {
         const filename = path.basename(req.params.filename);
-        const filePath = path.join(TEMPLATES_DIR, filename);
-
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ message: 'Plantilla no encontrada' });
-        }
-
-        fs.unlinkSync(filePath);
+        await templateService.deleteTemplate(filename);
         res.json({ message: `Plantilla ${filename} eliminada correctamente` });
     } catch (error) {
         res.status(500).json({ message: 'Error al eliminar plantilla', error: error.message });
