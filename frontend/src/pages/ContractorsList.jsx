@@ -41,6 +41,11 @@ const ContractorsList = () => {
     const [deleting, setDeleting] = useState(false);
     const [feedback, setFeedback] = useState(null);
 
+    // Custom Delivery Date State (Cierre Especial Diciembre)
+    const [customDeliveryDate, setCustomDeliveryDate] = useState('');
+    const [deliveryNotes, setDeliveryNotes] = useState('');
+    const [savingDeliveryDate, setSavingDeliveryDate] = useState(false);
+
     // Create Contractor Modal State
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [creating, setCreating] = useState(false);
@@ -57,6 +62,13 @@ const ContractorsList = () => {
         contractorPhone: '',
         contractorAddress: ''
     });
+
+    useEffect(() => {
+        if (selectedContractor) {
+            setCustomDeliveryDate(selectedContractor.customDeliveryDate || '');
+            setDeliveryNotes(selectedContractor.deliveryNotes || '');
+        }
+    }, [selectedContractor]);
 
     useEffect(() => {
         fetchContractors();
@@ -157,6 +169,61 @@ const ContractorsList = () => {
                 message: error.response?.data?.message || 'Error al actualizar el pago del acta'
             });
         } finally {
+            setTimeout(() => setFeedback(null), 5000);
+        }
+    };
+
+    const handleSaveDeliveryDate = async (clear = false) => {
+        if (!selectedContractor) return;
+        const contractId = selectedContractor.primaryContractId || selectedContractor.contracts?.[0]?._id;
+        if (!contractId) {
+            setFeedback({ type: 'error', message: 'No se encontró un contrato asociado para este contratista.' });
+            return;
+        }
+
+        setSavingDeliveryDate(true);
+        try {
+            const payload = {
+                customDeliveryDate: clear ? '' : (customDeliveryDate || '').trim(),
+                deliveryNotes: clear ? '' : (deliveryNotes || '').trim()
+            };
+            const { data } = await api.patch(`/admin/contracts/${contractId}/delivery-date`, payload);
+            setFeedback({ type: 'success', message: data.message || 'Fecha de entrega actualizada correctamente' });
+            
+            if (clear) {
+                setCustomDeliveryDate('');
+                setDeliveryNotes('');
+            }
+
+            setSelectedContractor(prev => ({
+                ...prev,
+                customDeliveryDate: payload.customDeliveryDate,
+                deliveryNotes: payload.deliveryNotes,
+                contracts: (prev?.contracts || []).map(c => c._id === contractId ? {
+                    ...c,
+                    customDeliveryDate: payload.customDeliveryDate,
+                    deliveryNotes: payload.deliveryNotes
+                } : c)
+            }));
+
+            setContractors(prev => prev.map(c => c._id === selectedContractor._id ? {
+                ...c,
+                customDeliveryDate: payload.customDeliveryDate,
+                deliveryNotes: payload.deliveryNotes,
+                contracts: (c?.contracts || []).map(con => con._id === contractId ? {
+                    ...con,
+                    customDeliveryDate: payload.customDeliveryDate,
+                    deliveryNotes: payload.deliveryNotes
+                } : con)
+            } : c));
+        } catch (error) {
+            console.error('Error al guardar fecha de entrega:', error);
+            setFeedback({
+                type: 'error',
+                message: error.response?.data?.message || 'Error al actualizar la fecha de entrega del contrato'
+            });
+        } finally {
+            setSavingDeliveryDate(false);
             setTimeout(() => setFeedback(null), 5000);
         }
     };
@@ -540,6 +607,23 @@ const ContractorsList = () => {
                                                         <>
                                                             <div style={{ fontWeight: 500 }}>{c.contractNumber}</div>
                                                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{c.contractType}</div>
+                                                            {c.customDeliveryDate && (
+                                                                <div style={{
+                                                                    marginTop: '0.25rem',
+                                                                    fontSize: '0.7rem',
+                                                                    fontWeight: 600,
+                                                                    color: '#f59e0b',
+                                                                    display: 'inline-flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '0.25rem',
+                                                                    background: 'rgba(245, 158, 11, 0.1)',
+                                                                    padding: '0.15rem 0.45rem',
+                                                                    borderRadius: '4px',
+                                                                    border: '1px solid rgba(245, 158, 11, 0.25)'
+                                                                }} title={c.deliveryNotes || 'Fecha de entrega anticipada / Cierre de diciembre'}>
+                                                                    <Calendar size={11} /> Cierre: {c.customDeliveryDate}
+                                                                </div>
+                                                            )}
                                                         </>
                                                     ) : (
                                                         <span style={{ fontSize: '0.75rem', color: '#f59e0b', background: 'rgba(245, 158, 11, 0.1)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
@@ -871,6 +955,112 @@ const ContractorsList = () => {
                                             <span>Eximir de Pago (Sin Costo)</span>
                                         )}
                                     </button>
+                                </div>
+
+                                {/* Fecha de Entrega Anticipada / Cierre Especial de Diciembre */}
+                                <div style={{
+                                    background: 'rgba(59, 130, 246, 0.03)',
+                                    border: '1px solid rgba(59, 130, 246, 0.25)',
+                                    padding: '1.25rem',
+                                    borderRadius: 'var(--radius-md)',
+                                    marginBottom: '1.5rem'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+                                        <div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
+                                                <Calendar size={17} color="var(--primary)" />
+                                                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-main)' }}>
+                                                    Fecha de Entrega Anticipada / Cierre de Diciembre
+                                                </span>
+                                            </div>
+                                            <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', maxWidth: '520px', lineHeight: 1.45 }}>
+                                                Para contratos que finalizan en diciembre o requieren entrega antes de la finalización del corte por cierre fiscal de Tesorería. Ajusta automáticamente el periodo de cobro, la firma del acta parcial y la prórroga de 5 días para evidencias y ZIP.
+                                            </p>
+                                        </div>
+                                        {selectedContractor.customDeliveryDate && (
+                                            <span style={{
+                                                fontSize: '0.75rem',
+                                                fontWeight: 700,
+                                                color: '#f59e0b',
+                                                background: 'rgba(245, 158, 11, 0.15)',
+                                                border: '1px solid rgba(245, 158, 11, 0.3)',
+                                                padding: '0.2rem 0.6rem',
+                                                borderRadius: '12px',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.3rem'
+                                            }}>
+                                                <CheckCircle2 size={13} /> Activa: {selectedContractor.customDeliveryDate}
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                                                Fecha Límite de Entrega
+                                            </label>
+                                            <input 
+                                                type="date"
+                                                className="input"
+                                                value={customDeliveryDate}
+                                                onChange={(e) => setCustomDeliveryDate(e.target.value)}
+                                                style={{ width: '100%', fontSize: '0.85rem', padding: '0.5rem 0.75rem' }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                                                Nota / Observación (Opcional)
+                                            </label>
+                                            <input 
+                                                type="text"
+                                                className="input"
+                                                placeholder="Ej: Cierre fiscal Tesorería Armenia"
+                                                value={deliveryNotes}
+                                                onChange={(e) => setDeliveryNotes(e.target.value)}
+                                                style={{ width: '100%', fontSize: '0.85rem', padding: '0.5rem 0.75rem' }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+                                        {selectedContractor.customDeliveryDate && (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleSaveDeliveryDate(true)}
+                                                disabled={savingDeliveryDate}
+                                                className="btn"
+                                                style={{
+                                                    fontSize: '0.8rem',
+                                                    padding: '0.45rem 0.9rem',
+                                                    background: 'rgba(239, 68, 68, 0.1)',
+                                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                                    color: '#ef4444',
+                                                    borderRadius: 'var(--radius-md)',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                Restablecer Fecha Normal
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSaveDeliveryDate(false)}
+                                            disabled={savingDeliveryDate || (!customDeliveryDate && !selectedContractor.customDeliveryDate)}
+                                            className="btn btn-primary"
+                                            style={{
+                                                fontSize: '0.8rem',
+                                                padding: '0.45rem 1.1rem',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                borderRadius: 'var(--radius-md)'
+                                            }}
+                                        >
+                                            <Calendar size={14} />
+                                            {savingDeliveryDate ? 'Guardando...' : 'Guardar Fecha de Entrega'}
+                                        </button>
+                                    </div>
                                 </div>
 
                                 {/* Control de Pagos por Periodo / Acta */}

@@ -9,6 +9,7 @@ const PaymentConfig = require('../models/PaymentConfig');
 const PaymentReceipt = require('../models/PaymentReceipt');
 const storageService = require('../services/storage.service');
 const templateService = require('../services/template.service');
+const { calculatePeriods } = require('../utils/period.utils');
 
 const TEMPLATES_DIR = path.resolve(__dirname, '..', 'templates');
 
@@ -82,6 +83,9 @@ exports.getRegisteredContractors = async (req, res) => {
                 cedula: primaryContract?.idNumber || 'Sin cédula registrada',
                 contractorName: primaryContract?.contractorName || u.fullName,
                 contractNumber: primaryContract?.contractNumber || 'Sin contrato',
+                primaryContractId: primaryContract?._id || null,
+                customDeliveryDate: primaryContract?.customDeliveryDate || '',
+                deliveryNotes: primaryContract?.deliveryNotes || '',
                 entityName: primaryContract?.entityName || primaryContract?.supervisorDependency || 'Alcaldía de Armenia',
                 contractsCount: userContracts.length,
                 contracts: userContracts.map(c => ({
@@ -92,6 +96,8 @@ exports.getRegisteredContractors = async (req, res) => {
                     supervisorName: c.supervisorName,
                     startDate: c.startDate,
                     endDate: c.endDate,
+                    customDeliveryDate: c.customDeliveryDate || '',
+                    deliveryNotes: c.deliveryNotes || '',
                     totalValue: c.totalValue,
                     monthlyValue: c.monthlyValue,
                     status: c.status || 'active',
@@ -1265,6 +1271,69 @@ exports.rejectPaymentAdmin = async (req, res) => {
     } catch (error) {
         console.error('Error al rechazar pago:', error);
         res.status(500).json({ message: 'Error al rechazar pago', error: error.message });
+    }
+};
+
+/**
+ * PATCH /api/admin/contracts/:id/delivery-date
+ * Permite al administrador fijar o modificar la fecha de entrega anticipada o cierre de diciembre
+ * y opcionalmente notas de entrega asociadas a un contrato.
+ */
+exports.updateContractDeliveryDate = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { customDeliveryDate, deliveryNotes } = req.body;
+
+        const contract = await Contract.findById(id);
+        if (!contract) {
+            return res.status(404).json({ message: 'Contrato no encontrado' });
+        }
+
+        contract.customDeliveryDate = customDeliveryDate !== undefined ? (customDeliveryDate || '').trim() : contract.customDeliveryDate;
+        if (deliveryNotes !== undefined) {
+            contract.deliveryNotes = (deliveryNotes || '').trim();
+        }
+
+        await contract.save();
+
+        // Si se definió una fecha personalizada, actualizar automáticamente el periodTo de los BillingPeriods pendientes asociados
+        if (contract.customDeliveryDate) {
+            const periods = calculatePeriods(
+                contract.startDate,
+                contract.initialDurationMonths || 4,
+                contract.additionDurationMonths || 0,
+                contract.periodType || 'mes_cumplido',
+                contract.endDate,
+                contract.customDeliveryDate
+            );
+
+            for (const p of periods) {
+                if (p.isCustomCutoff) {
+                    const bp = await BillingPeriod.findOne({
+                        contract: contract._id,
+                        actNumber: p.actNumber,
+                        status: 'pending'
+                    });
+                    if (bp) {
+                        bp.periodTo = new Date(p.to + 'T23:59:59');
+                        await bp.save();
+                    }
+                }
+            }
+        }
+
+        res.json({
+            success: true,
+            message: 'Fecha de entrega anticipada / cierre de diciembre actualizada exitosamente',
+            contract: {
+                _id: contract._id,
+                customDeliveryDate: contract.customDeliveryDate,
+                deliveryNotes: contract.deliveryNotes
+            }
+        });
+    } catch (error) {
+        console.error('Error al actualizar fecha de entrega del contrato:', error);
+        res.status(500).json({ message: 'Error al actualizar fecha de entrega del contrato', error: error.message });
     }
 };
 

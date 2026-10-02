@@ -90,7 +90,7 @@ export default function BillingForm({ contract, onComplete }) {
     const [showPassword, setShowPassword] = useState(false);
 
     const activeActInfo = React.useMemo(() => {
-        if (!contract) return { targetAct: 1, reason: '' };
+        if (!contract) return { targetAct: 1, reason: '', periods: [] };
         return determineActiveAct(contract);
     }, [contract]);
 
@@ -109,14 +109,17 @@ export default function BillingForm({ contract, onComplete }) {
 
     const periodsList = React.useMemo(() => {
         if (!contract) return [];
-        return calculatePeriods(
-            contract.startDate,
-            contract.initialDurationMonths || 4,
-            contract.additionDurationMonths || 0,
-            contract.periodType || 'mes_cumplido',
-            contract.endDate
-        );
-    }, [contract]);
+        return (activeActInfo.periods && activeActInfo.periods.length > 0)
+            ? activeActInfo.periods
+            : calculatePeriods(
+                contract.startDate,
+                contract.initialDurationMonths || 4,
+                contract.additionDurationMonths || 0,
+                contract.periodType || 'mes_cumplido',
+                contract.endDate,
+                contract.customDeliveryDate
+            );
+    }, [contract, activeActInfo]);
 
     React.useEffect(() => {
         if (contract?.startDate) {
@@ -135,6 +138,34 @@ export default function BillingForm({ contract, onComplete }) {
             });
         }
     }, [selectedAct, periodsList]);
+
+    React.useEffect(() => {
+        const loadDraftForAct = async () => {
+            try {
+                const { data } = await api.get('/billing');
+                const existingList = Array.isArray(data) ? data : (data?.data || []);
+                const found = existingList.find(p => p.actNumber === selectedAct);
+                if (found) {
+                    setPeriodId(found._id);
+                    if (found.securitySocial) {
+                        setSs(prev => ({ ...prev, ...found.securitySocial }));
+                    }
+                    if (found.securitySocialPath) {
+                        setPlanillaPath(found.securitySocialPath);
+                    }
+                    if (found.activities && found.activities.length > 0) {
+                        setActivities(found.activities.map(a => ({
+                            obligationCode: a.obligationCode,
+                            obligationText: a.obligationText,
+                            comment: a.comment || '',
+                            files: []
+                        })));
+                    }
+                }
+            } catch (_) {}
+        };
+        loadDraftForAct();
+    }, [selectedAct]);
 
 
     // Build initial activities from contract specific obligations only
@@ -421,13 +452,61 @@ export default function BillingForm({ contract, onComplete }) {
                                         onChange={(e) => setSelectedAct(parseInt(e.target.value))}
                                         style={{ fontWeight: '600' }}
                                     >
-                                        {periodsList.map((p) => (
-                                            <option key={p.actNumber} value={p.actNumber}>
-                                                Acta N° {p.actNumber} {p.isAddition ? '(Adición Contractual)' : '(Contrato Inicial)'} ({p.from} al {p.to}) {p.actNumber === activeActInfo.targetAct ? '★ [Periodo en Curso]' : ''}
-                                            </option>
-                                        ))}
+                                        {periodsList.map((p) => {
+                                            let tag = '';
+                                            if (p.actNumber === activeActInfo?.unfinishedPreviousAct && activeActInfo?.inGracePeriod) {
+                                                tag = ` ⏳ [En Prórroga: ${activeActInfo.graceDaysRemaining}d restantes]`;
+                                            } else if (p.isCustomCutoff) {
+                                                tag = ` 📅 [Cierre Especial: ${p.to}]`;
+                                            } else if (p.actNumber === activeActInfo?.targetAct) {
+                                                tag = ' ★ [Periodo en Curso]';
+                                            }
+                                            return (
+                                                <option key={p.actNumber} value={p.actNumber}>
+                                                    Acta N° {p.actNumber} {p.isAddition ? '(Adición Contractual)' : '(Contrato Inicial)'} ({p.from} al {p.to}){tag}
+                                                </option>
+                                            );
+                                        })}
                                     </select>
                                 </div>
+                                {periodsList.find(p => p.actNumber === selectedAct)?.inGrace && (
+                                    <div style={{
+                                        gridColumn: '1 / -1',
+                                        padding: '0.75rem 1rem',
+                                        background: 'rgba(245, 158, 11, 0.12)',
+                                        border: '1px solid rgba(245, 158, 11, 0.4)',
+                                        borderRadius: 'var(--radius-md)',
+                                        fontSize: '0.85rem',
+                                        color: 'var(--text-main)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.6rem'
+                                    }}>
+                                        <Clock size={16} color="#d97706" />
+                                        <span>
+                                            <strong>Prórroga de radicación activa:</strong> Este periodo finalizó pero dispones de <strong>{periodsList.find(p => p.actNumber === selectedAct)?.graceDaysRemaining} día(s)</strong> para culminar el cargue de tus evidencias y descargar tu paquete ZIP con total normalidad.
+                                        </span>
+                                    </div>
+                                )}
+                                {periodsList.find(p => p.actNumber === selectedAct)?.isCustomCutoff && (
+                                    <div style={{
+                                        gridColumn: '1 / -1',
+                                        padding: '0.75rem 1rem',
+                                        background: 'rgba(59, 130, 246, 0.08)',
+                                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                                        borderRadius: 'var(--radius-md)',
+                                        fontSize: '0.85rem',
+                                        color: 'var(--text-main)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.6rem'
+                                    }}>
+                                        <Clock size={16} color="var(--primary)" />
+                                        <span>
+                                            <strong>Fecha de Entrega Anticipada / Cierre Especial:</strong> Este periodo cuenta con fecha límite de entrega al <strong>{periodsList.find(p => p.actNumber === selectedAct)?.to}</strong> {contract?.deliveryNotes ? `(${contract.deliveryNotes})` : 'por cierre fiscal de vigencia'}. Los formatos y la firma del acta parcial se ajustan a esta fecha.
+                                        </span>
+                                    </div>
+                                )}
                                 {activeActInfo?.reason && (
                                     <div style={{
                                         gridColumn: '1 / -1',

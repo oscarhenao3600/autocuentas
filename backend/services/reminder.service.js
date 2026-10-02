@@ -28,7 +28,8 @@ async function checkContractEvidenceStatus(contract, user) {
         contract.initialDurationMonths || 4,
         contract.additionDurationMonths || 0,
         contract.periodType || 'mes_cumplido',
-        contract.endDate
+        contract.endDate,
+        contract.customDeliveryDate
     );
 
     if (!periods || periods.length === 0) return null;

@@ -23,7 +23,8 @@ const {
     updatePaymentConfig,
     getAllPayments,
     approvePaymentAdmin,
-    rejectPaymentAdmin
+    rejectPaymentAdmin,
+    updateContractDeliveryDate
 } = require('../controllers/admin.controller');
 const { protect, admin } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
@@ -33,6 +34,7 @@ router.post('/users', protect, admin, createContractor);
 router.patch('/users/:id/toggle-exempt', protect, admin, toggleUserExemption);
 router.patch('/periods/:id/toggle-paid', protect, admin, togglePeriodPayment);
 router.delete('/users/:id', protect, admin, deleteUser);
+router.patch('/contracts/:id/delivery-date', protect, admin, updateContractDeliveryDate);
 router.get('/documents', protect, admin, getAllDocuments);
 router.delete('/documents', protect, admin, deleteDocument);
 router.get('/accounts', protect, admin, getAllAccounts);

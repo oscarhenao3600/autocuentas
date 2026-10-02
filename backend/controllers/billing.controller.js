@@ -439,8 +439,11 @@ const generateBillingPackage = async (periodId, userId) => {
         }
 
         const periodToDateObj = parseDateSafe(period.periodTo) || new Date();
-        const lastDayOfMonth = new Date(periodToDateObj.getFullYear(), periodToDateObj.getMonth() + 1, 0).getDate();
-        const actaParcialDia = String(lastDayOfMonth).padStart(2, '0');
+        const toDay = periodToDateObj.getDate();
+        const isCustomDate = Boolean(contract.customDeliveryDate && (formatDateNumeric(period.periodTo) === formatDateNumeric(contract.customDeliveryDate)));
+        const actaParcialDia = (isCustomDate || toDay < 25)
+            ? String(toDay).padStart(2, '0')
+            : String(new Date(periodToDateObj.getFullYear(), periodToDateObj.getMonth() + 1, 0).getDate()).padStart(2, '0');
         const actaParcialMesNum = String(periodToDateObj.getMonth() + 1).padStart(2, '0');
         const fechaCorteSign = `${actaParcialDia} - ${actaParcialMesNum} - ${periodToDateObj.getFullYear()}`;
 
@@ -484,6 +487,10 @@ const generateBillingPackage = async (periodId, userId) => {
             cdp:                               periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
             rp:                                periodIsAddition ? (contract.additionRp || contract.rp || '') : (contract.rp || ''),
             rubro_presupuestal:                formatRubroPresupuestal(
+                periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
+                contract.fuenteCodigo || contract.fuenteFinanciacion
+            ),
+            rubrol:                            formatRubroPresupuestal(
                 periodIsAddition ? (contract.additionRubro || contract.rubro || '') : (contract.rubro || ''),
                 contract.fuenteCodigo || contract.fuenteFinanciacion
             ),

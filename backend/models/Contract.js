@@ -99,6 +99,14 @@ const contractSchema = new mongoose.Schema({
         type: Number,
         default: 25
     },
+    customDeliveryDate: {
+        type: String,
+        default: ""
+    },
+    deliveryNotes: {
+        type: String,
+        default: ""
+    },
     totalValueWord: {
         type: String,
         default: ""

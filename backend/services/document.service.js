@@ -156,6 +156,15 @@ exports.generateDocument = async (templateName, data) => {
             paragraphLoop: true,
             linebreaks: true,
             delimiters: hasDoubleBraces ? { start: "{{", end: "}}" } : { start: "{", end: "}" },
+            nullGetter(part) {
+                if (!part.module) {
+                    return "";
+                }
+                if (part.module === "rawxml") {
+                    return "";
+                }
+                return "";
+            }
         });
 
         // Fill the template with data

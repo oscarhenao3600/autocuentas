@@ -562,7 +562,9 @@ exports.updateContract = async (req, res) => {
             'periodType', 'initialDurationMonths', 'additionDurationMonths', 'hasAddition',
             'additionValue', 'additionValueWord', 'additionStartDate', 'additionEndDate',
             'additionCdp', 'additionRp', 'additionRubro', 'additionDuration',
-            'executionTerm', 'unidadEjecutora', 'unidadEjecutoraCodigo', 'unidadContratacion'
+            'executionTerm', 'unidadEjecutora', 'unidadEjecutoraCodigo', 'unidadContratacion',
+            'fuenteFinanciacion', 'fuenteCodigo',
+            'customDeliveryDate', 'deliveryNotes'
         ];
 
         allowedFields.forEach(field => {
@@ -570,6 +572,10 @@ exports.updateContract = async (req, res) => {
                 contract[field] = req.body[field];
             }
         });
+
+        if (contract.rubro) {
+            contract.rubro = formatRubroPresupuestal(contract.rubro, contract.fuenteCodigo || contract.fuenteFinanciacion);
+        }
 
         await contract.save();
 

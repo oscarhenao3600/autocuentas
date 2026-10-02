@@ -58,7 +58,7 @@ const formatDateStr = (date) => {
  * @param {string} [endDateStr] - Fecha de terminación oficial del contrato (opcional, YYYY-MM-DD)
  * @returns {Array} - Listado de periodos con fechas exactas
  */
-const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, periodType = 'mes_cumplido', endDateStr = null) => {
+const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, periodType = 'mes_cumplido', endDateStr = null, customDeliveryDate = null) => {
     if (!startDateStr) return [];
 
     let periods = [];
@@ -77,9 +77,19 @@ const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, p
             parsedEnd = new Date(ey, em - 1, ed);
         }
     }
+
+    let parsedCustomDelivery = null;
+    if (customDeliveryDate) {
+        const rawDeliveryPart = String(customDeliveryDate).split('T')[0].trim();
+        const [dy, dm, dd] = rawDeliveryPart.split('-').map(Number);
+        if (!isNaN(dy) && !isNaN(dm) && !isNaN(dd)) {
+            parsedCustomDelivery = new Date(dy, dm - 1, dd);
+        }
+    }
     
     for (let i = 1; i <= totalPeriods; i++) {
         let currentEnd;
+        let isCustomCutoff = false;
         
         if (periodType === '30_dias') {
             // Cada periodo dura exactamente 30 días calendario
@@ -107,12 +117,28 @@ const calculatePeriods = (startDateStr, initialMonths = 4, additionMonths = 0, p
                 currentEnd = new Date(parsedEnd);
             }
         }
+
+        // Si se especificó customDeliveryDate (ej: entrega anticipada o corte especial de diciembre)
+        if (parsedCustomDelivery) {
+            const fallsInPeriod = currentStart <= parsedCustomDelivery && currentEnd >= parsedCustomDelivery;
+            const isFinalPeriodDelivery = i === totalPeriods && parsedCustomDelivery >= currentStart;
+            const isDecemberClosing = (currentEnd.getMonth() === 11 || currentStart.getMonth() === 11) && 
+                                      parsedCustomDelivery.getMonth() === 11 && 
+                                      parsedCustomDelivery >= currentStart;
+
+            if (fallsInPeriod || isFinalPeriodDelivery || isDecemberClosing) {
+                currentEnd = new Date(parsedCustomDelivery);
+                isCustomCutoff = true;
+            }
+        }
         
         periods.push({
             actNumber: i,
             from: formatDateStr(currentStart),
             to: formatDateStr(currentEnd),
-            isAddition: i > Number(initialMonths || 4)
+            isAddition: i > Number(initialMonths || 4),
+            isCustomCutoff,
+            customDeliveryDate: isCustomCutoff && parsedCustomDelivery ? formatDateStr(parsedCustomDelivery) : null
         });
         
         // El siguiente periodo inicia al día siguiente del fin del periodo actual
@@ -370,71 +396,163 @@ const calculateSocialSecurity = (contract, period = {}, uploadedSS = {}) => {
  */
 const determineActiveAct = (contract, existingPeriods = [], currentDate = new Date()) => {
     if (!contract || !contract.startDate) {
-        return { targetAct: 1, currentPeriod: null, periods: [], reason: 'Contrato sin fecha de inicio definida' };
+        return {
+            targetAct: 1,
+            currentPeriod: null,
+            periods: [],
+            hasTransitionPending: false,
+            hasUnfinishedPreviousAct: false,
+            unfinishedPreviousAct: null,
+            unfinishedPeriod: null,
+            inGracePeriod: false,
+            graceDaysRemaining: 0,
+            graceEndDate: null,
+            canStartNextAct: false,
+            reason: 'Contrato sin fecha de inicio definida'
+        };
     }
 
     const periods = calculatePeriods(
         contract.startDate,
         contract.initialDurationMonths || 4,
         contract.additionDurationMonths || 0,
-        contract.periodType || '30_dias',
-        contract.endDate
+        contract.periodType || 'mes_cumplido',
+        contract.endDate,
+        contract.customDeliveryDate
     );
 
     if (!periods || periods.length === 0) {
-        return { targetAct: 1, currentPeriod: null, periods: [], reason: 'No hay periodos calculados' };
+        return {
+            targetAct: 1,
+            currentPeriod: null,
+            periods: [],
+            hasTransitionPending: false,
+            hasUnfinishedPreviousAct: false,
+            unfinishedPreviousAct: null,
+            unfinishedPeriod: null,
+            inGracePeriod: false,
+            graceDaysRemaining: 0,
+            graceEndDate: null,
+            canStartNextAct: false,
+            reason: 'No hay periodos calculados'
+        };
     }
 
     const now = (currentDate instanceof Date) ? currentDate : new Date(currentDate);
 
-    // 1. Si ya tiene actas descargadas/completadas en el sistema, partir de maxDownloaded + 1
-    const downloadedPeriods = (existingPeriods || []).filter(p => p.zipDownloaded || p.status === 'completed');
+    // Enriquecer cada periodo con cutoffDate y graceEndDate (5 días calendario de prórroga)
+    const enrichedPeriods = periods.map(p => {
+        const rawTo = String(p.to).split('T')[0];
+        const [toY, toM, toD] = rawTo.split('-').map(Number);
+        const lastDayOfToMonth = new Date(toY, toM, 0).getDate();
+
+        let cutoffDate;
+        const isCustomDate = p.isCustomCutoff || Boolean(contract.customDeliveryDate && p.to === String(contract.customDeliveryDate).split('T')[0]);
+        if (isCustomDate) {
+            // Para fecha de entrega anticipada / corte especial de diciembre, el corte es exactamente ese día a las 23:59:59
+            cutoffDate = new Date(toY, toM - 1, toD, 23, 59, 59, 999);
+        } else if (toD >= 20) {
+            cutoffDate = new Date(toY, toM - 1, lastDayOfToMonth, 23, 59, 59, 999);
+        } else {
+            cutoffDate = new Date(toY, toM - 1, toD, 23, 59, 59, 999);
+        }
+
+        // Prórroga de 5 días calendario posteriores a la fecha de corte para culminar cargue y descargar ZIP
+        const graceEndDate = new Date(cutoffDate.getFullYear(), cutoffDate.getMonth(), cutoffDate.getDate() + 5, 23, 59, 59, 999);
+
+        const isPastCutoff = now > cutoffDate;
+        const inGrace = isPastCutoff && now <= graceEndDate;
+        const graceDaysRemaining = inGrace 
+            ? Math.max(1, Math.ceil((graceEndDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+            : 0;
+
+        return {
+            ...p,
+            cutoffDate,
+            graceEndDate,
+            isPastCutoff,
+            inGrace,
+            graceDaysRemaining
+        };
+    });
+
+    // 1. Determinar el periodo según calendario
+    let calendarAct = 1;
+    for (const ep of enrichedPeriods) {
+        if (ep.isPastCutoff) {
+            calendarAct = ep.actNumber + 1;
+        } else {
+            calendarAct = ep.actNumber;
+            break;
+        }
+    }
+    calendarAct = Math.min(calendarAct, enrichedPeriods.length);
+
+    // 2. Revisar actas en la base de datos descargadas/completadas
+    const downloadedPeriods = (existingPeriods || []).filter(p => p.zipDownloaded || p.status === 'completed' || p.status === 'approved');
     let baseFromDb = 1;
     if (downloadedPeriods.length > 0) {
         baseFromDb = Math.max(...downloadedPeriods.map(p => p.actNumber)) + 1;
     }
 
-    // 2. Determinar acta según calendario y fecha de inicio
-    let calendarAct = 1;
-    for (const p of periods) {
-        const rawTo = String(p.to).split('T')[0];
-        const [toY, toM, toD] = rawTo.split('-').map(Number);
-        const lastDayOfToMonth = new Date(toY, toM, 0).getDate();
+    // El acta objetivo general sugerida para radicar
+    const targetAct = Math.max(baseFromDb, calendarAct);
+    const currentPeriod = enrichedPeriods.find(p => p.actNumber === targetAct) || enrichedPeriods[enrichedPeriods.length - 1];
 
-        // Si toD >= 20, el corte formal de radicación de la cuenta es el último día del mes (ej: 30 de septiembre).
-        // Si toD < 20, el corte es el mismo día de cierre del periodo de 30 días (ej: 12 de octubre).
-        let cutoffDate;
-        if (toD >= 20) {
-            cutoffDate = new Date(toY, toM - 1, lastDayOfToMonth, 23, 59, 59);
-        } else {
-            cutoffDate = new Date(toY, toM - 1, toD, 23, 59, 59);
-        }
+    // 3. Detectar si existe un acta anterior iniciada o pendiente por culminar
+    // (Por ejemplo Acta 1 pendiente de evidencias o descarga de ZIP cuando ya se puede iniciar el Acta 2)
+    let unfinishedPreviousAct = null;
+    let unfinishedPeriod = null;
+    let inGracePeriod = false;
+    let graceDaysRemaining = 0;
+    let graceEndDateStr = null;
 
-        if (now > cutoffDate) {
-            // Este periodo ya venció en el calendario
-            calendarAct = p.actNumber + 1;
-        } else {
-            // Encontró el periodo vigente
-            calendarAct = p.actNumber;
+    // Buscar entre las actas menores a targetAct si hay alguna sin descargar/aprobar
+    for (let actNum = 1; actNum < targetAct; actNum++) {
+        const foundDb = (existingPeriods || []).find(p => p.actNumber === actNum);
+        const isCompleted = foundDb && (foundDb.zipDownloaded || foundDb.status === 'completed' || foundDb.status === 'approved');
+        if (!isCompleted) {
+            unfinishedPreviousAct = actNum;
+            unfinishedPeriod = foundDb || null;
+
+            const pInfo = enrichedPeriods.find(p => p.actNumber === actNum);
+            if (pInfo) {
+                inGracePeriod = pInfo.inGrace;
+                graceDaysRemaining = pInfo.graceDaysRemaining;
+                graceEndDateStr = formatDateStr(pInfo.graceEndDate);
+            }
             break;
         }
     }
 
-    // Garantizar que no exceda el número total de periodos
-    calendarAct = Math.min(calendarAct, periods.length);
-    const targetAct = Math.max(baseFromDb, calendarAct);
-    const currentPeriod = periods.find(p => p.actNumber === targetAct) || periods[periods.length - 1];
+    const hasUnfinishedPreviousAct = unfinishedPreviousAct !== null;
+    const canStartNextAct = targetAct > 1 && (now >= new Date(currentPeriod.from + 'T00:00:00') || enrichedPeriods.some(p => p.actNumber < targetAct && p.isPastCutoff));
+    const hasTransitionPending = hasUnfinishedPreviousAct && canStartNextAct;
 
     let reason = 'El contrato se encuentra dentro del plazo de vigencia del periodo actual.';
-    if (targetAct > 1) {
+    if (hasTransitionPending) {
+        if (inGracePeriod) {
+            reason = `El periodo de la Cuenta ${unfinishedPreviousAct} finalizó pero cuenta con prórroga de ${graceDaysRemaining} día(s) para cargar evidencias y descargar el ZIP. Al mismo tiempo, la Cuenta ${targetAct} ya se encuentra habilitada.`;
+        } else {
+            reason = `La Cuenta ${unfinishedPreviousAct} no ha sido culminada ni descargada. La Cuenta ${targetAct} se encuentra habilitada para inicio.`;
+        }
+    } else if (targetAct > 1) {
         const startClean = String(contract.startDate).split('T')[0];
-        reason = `Por la fecha de inicio del contrato (${startClean}) y el tiempo transcurrido, el Acta ${targetAct - 1} ya finalizó. Se gestiona el Acta ${targetAct}.`;
+        reason = `Por la fecha de inicio del contrato (${startClean}) y el tiempo transcurrido, se gestiona el Acta ${targetAct}.`;
     }
 
     return {
         targetAct,
         currentPeriod,
-        periods,
+        periods: enrichedPeriods,
+        hasTransitionPending,
+        hasUnfinishedPreviousAct,
+        unfinishedPreviousAct,
+        unfinishedPeriod,
+        inGracePeriod,
+        graceDaysRemaining,
+        graceEndDate: graceEndDateStr,
+        canStartNextAct,
         reason
     };
 };
@@ -455,7 +573,10 @@ function formatRubroPresupuestal(rawRubro = '', rawFuente = '') {
     // 1. Si ya viene formateado como "X.X.X.X - YYY", limpiarlo y retornarlo
     const alreadyFormatted = fullText.match(/(\d+(?:\.\d+){2,})\s*[-–]\s*(\d{1,4})/);
     if (alreadyFormatted) {
-        return alreadyFormatted[1].trim() + ' - ' + alreadyFormatted[2].trim();
+        const rCode = alreadyFormatted[1].trim();
+        let fCode = alreadyFormatted[2].trim();
+        if (fCode.length <= 3) fCode = fCode.padStart(3, '0');
+        return `${rCode} - ${fCode}`;
     }
 
     // 2. Extraer código del rubro (ej: 2.3.2.02.02.009.4599007.077 o 2.1.2.02.01.003.02)
@@ -469,7 +590,7 @@ function formatRubroPresupuestal(rawRubro = '', rawFuente = '') {
 
     // 3. Extraer código de la fuente (ej: 001 - RECURSOS PROPIOS, 001, etc.)
     let fuenteCode = '';
-    const fuentePattern1 = remainingText.match(/(\d{3})\s*[-–]\s*(?:RECURSOS|ICLD|SGP|INGRESOS|PROPIOS)/i);
+    const fuentePattern1 = remainingText.match(/(\d{1,4})\s*[-–]\s*(?:RECURSOS|ICLD|SGP|INGRESOS|PROPIOS)/i);
     const fuentePattern2 = remainingText.match(/(?:RECURSOS|FUENTE|FTE)[\s:]*(\d{1,4})/i);
     const fuentePattern3 = (rawFuente || '').match(/\b(\d{1,4})\b/);
     const fuentePattern4 = remainingText.match(/\b(00[1-9]|0[1-9]\d|[1-9]\d{2})\b/);
@@ -482,6 +603,13 @@ function formatRubroPresupuestal(rawRubro = '', rawFuente = '') {
         fuenteCode = fuentePattern3[1];
     } else if (fuentePattern4) {
         fuenteCode = fuentePattern4[1];
+    } else if (/RECURSOS\s+PROPIOS|PROPIOS|ICLD/i.test(fullText)) {
+        // Fallback estándar en entidades territoriales colombianas: Recursos Propios = 001
+        fuenteCode = '001';
+    }
+
+    if (fuenteCode && fuenteCode.length <= 3) {
+        fuenteCode = fuenteCode.padStart(3, '0');
     }
 
     if (rubroCode && fuenteCode) {

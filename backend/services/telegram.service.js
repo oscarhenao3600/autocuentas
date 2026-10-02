@@ -543,7 +543,8 @@ const checkAndAdvancePaymentStatus = async (user, contract) => {
             contract.initialDurationMonths || 4,
             contract.additionDurationMonths || 0,
             contract.periodType || 'mes_cumplido',
-            contract.endDate
+            contract.endDate,
+            contract.customDeliveryDate
         );
 
         const existingPeriods = await BillingPeriod.find({
@@ -618,11 +619,19 @@ const getContractCurrentActiveAct = async (userId, contractId, contract) => {
             currentPeriod,
             existingPeriods,
             periods,
+            hasTransitionPending: activeResult.hasTransitionPending,
+            hasUnfinishedPreviousAct: activeResult.hasUnfinishedPreviousAct,
+            unfinishedPreviousAct: activeResult.unfinishedPreviousAct,
+            unfinishedPeriod: activeResult.unfinishedPeriod,
+            inGracePeriod: activeResult.inGracePeriod,
+            graceDaysRemaining: activeResult.graceDaysRemaining,
+            graceEndDate: activeResult.graceEndDate,
+            canStartNextAct: activeResult.canStartNextAct,
             reason: activeResult.reason
         };
     } catch (err) {
         console.error('Error en getContractCurrentActiveAct:', err);
-        return { targetAct: 1, currentPeriod: null, existingPeriods: [], periods: [] };
+        return { targetAct: 1, currentPeriod: null, existingPeriods: [], periods: [], hasTransitionPending: false, hasUnfinishedPreviousAct: false, inGracePeriod: false };
     }
 };
 
@@ -652,7 +661,8 @@ const handleIncomingPaymentReceipt = async (chatId, message, user, media) => {
                     contract.initialDurationMonths || 4,
                     contract.additionDurationMonths || 0,
                     contract.periodType || 'mes_cumplido',
-                    contract.endDate
+                    contract.endDate,
+                    contract.customDeliveryDate
                 );
                 const pConfig = periods.find(p => p.actNumber === actNumber);
                 const specificObligations = filterSpecificObligations(contract.activities || []);
@@ -1107,21 +1117,31 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
             return;
         }
 
-        const periods = calculatePeriods(
+        const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
+        const periods = (activeInfo.periods && activeInfo.periods.length > 0) ? activeInfo.periods : calculatePeriods(
             contract.startDate,
             contract.initialDurationMonths || 4,
             contract.additionDurationMonths || 0,
             contract.periodType || 'mes_cumplido',
-            contract.endDate
+            contract.endDate,
+            contract.customDeliveryDate
         );
 
-        const existingPeriods = await BillingPeriod.find({
+        const existingPeriods = activeInfo.existingPeriods || await BillingPeriod.find({
             user: user._id,
             $or: [{ contract: contract._id }, { contract: null }]
         });
 
         const banner = getContractBanner(contract);
-        let text = `${banner}📂 Gestión de Evidencias\n\nSelecciona el número de Acta de Cobro para la cual deseas cargar evidencias y comentarios:`;
+        let text = `${banner}📂 Gestión de Evidencias\n\n`;
+        if (activeInfo.hasTransitionPending) {
+            if (activeInfo.inGracePeriod) {
+                text += `⏳ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está en prórroga de radicación (${activeInfo.graceDaysRemaining} día(s) restantes). Puedes culminar evidencias y descargar el ZIP. Al mismo tiempo, la Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
+            } else {
+                text += `⚠️ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está pendiente por culminar o descargar ZIP. La Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
+            }
+        }
+        text += `Selecciona el número de Acta de Cobro para la cual deseas cargar evidencias y comentarios:`;
         const keyboard = [];
 
         for (const p of periods) {
@@ -1129,7 +1149,15 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
             const access = await checkPeriodAccess(chatId, user, p.actNumber, existing);
             let statusLabel = '';
 
-            if (existing) {
+            if (existing && existing.zipDownloaded) {
+                statusLabel = ' (✅ ZIP Generado)';
+            } else if (p.actNumber === activeInfo.unfinishedPreviousAct && activeInfo.inGracePeriod) {
+                statusLabel = ` (⏳ Prórroga ${activeInfo.graceDaysRemaining}d)`;
+            } else if (p.isCustomCutoff) {
+                statusLabel = ` (📅 Cierre ${p.to})`;
+            } else if (p.actNumber === activeInfo.targetAct) {
+                statusLabel = ' (🚀 En Curso)';
+            } else if (existing) {
                 if (existing.status === 'approved') statusLabel = ' (Aprobada)';
                 else if (existing.status === 'rejected') statusLabel = ' (Rechazada)';
                 else if (!access.allowed) statusLabel = ' (Pago Requerido)';
@@ -1182,7 +1210,8 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
             contract.initialDurationMonths || 4,
             contract.additionDurationMonths || 0,
             contract.periodType || 'mes_cumplido',
-            contract.endDate
+            contract.endDate,
+            contract.customDeliveryDate
         );
 
         let periodInfo = periods.find(p => p.actNumber === actNumber);
@@ -1337,8 +1366,16 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         const fromStr = period.periodFrom ? period.periodFrom.toISOString().split('T')[0] : periodInfo.from;
         const toStr = period.periodTo ? period.periodTo.toISOString().split('T')[0] : periodInfo.to;
 
+        const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
         const banner = getContractBanner(contract);
-        let text = `${banner}📋 ¿Para cuál obligación es a la que se le va a subir dicha evidencia?\n\n`;
+        let text = `${banner}`;
+        if (actNumber === activeInfo.unfinishedPreviousAct && activeInfo.inGracePeriod) {
+            text += `⏳ *Acta N° ${actNumber} en Prórroga de Radicación:* Quedan ${activeInfo.graceDaysRemaining} día(s) para culminar evidencias y descargar el paquete ZIP.\n\n`;
+        }
+        if (periodInfo?.isCustomCutoff) {
+            text += `📅 *Cierre Especial / Fecha de Entrega Anticipada:* ${toStr}${contract.deliveryNotes ? `\n📝 *Nota:* ${contract.deliveryNotes}` : ''}\n\n`;
+        }
+        text += `📋 ¿Para cuál obligación es a la que se le va a subir dicha evidencia?\n\n`;
         text += `Acta de Cobro N. ${actNumber} (Periodo: ${fromStr} al ${toStr})\n`;
         text += `──────────────────────\n`;
         text += `Lista de obligaciones del contrato:\n\n`;
@@ -1371,6 +1408,9 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         keyboard.push([
             { text: '🏥 Subir Planilla SS', callback_data: `upload_planilla_${period._id}` },
             { text: '📊 Resumen del Acta', callback_data: `summary_${period._id}` }
+        ]);
+        keyboard.push([
+            { text: `📦 Descargar Paquete ZIP (Acta ${actNumber})`, callback_data: `download_zip_act_${actNumber}` }
         ]);
         keyboard.push([
             { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' },
@@ -1414,12 +1454,29 @@ const showObligationsFlow = async (chatId, user, editMessageId = null, forcedAct
 
     let actNumber = forcedActNumber;
     if (!actNumber) {
-        const activePeriod = await BillingPeriod.findOne({
-            user: user._id,
-            $or: [{ contract: contract._id }, { contract: null }],
-            status: 'pending'
-        }).sort({ actNumber: 1 });
-        actNumber = activePeriod ? activePeriod.actNumber : 1;
+        const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
+        if (activeInfo.hasTransitionPending) {
+            const banner = getContractBanner(contract);
+            let msg = `${banner}📋 Tienes dos periodos disponibles para cargar evidencias:\n\n`;
+            msg += `1️⃣ *Cuenta ${activeInfo.unfinishedPreviousAct} (Acta ${activeInfo.unfinishedPreviousAct}):* ${activeInfo.inGracePeriod ? `⏳ En prórroga (${activeInfo.graceDaysRemaining} día(s) restantes para radicación)` : 'Pendiente por culminar'}\n`;
+            msg += `2️⃣ *Cuenta ${activeInfo.targetAct} (Acta ${activeInfo.targetAct}):* 🚀 Periodo en curso habilitado (${activeInfo.currentPeriod?.from} al ${activeInfo.currentPeriod?.to})\n\n`;
+            msg += `¿A cuál cuenta deseas cargar evidencias o gestionar?`;
+
+            const keyboard = [
+                [{ text: `📝 Subir a Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
+                [{ text: `🚀 Subir a Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
+                [{ text: `📊 Ver Todas las Actas`, callback_data: 'show_acts_menu' }]
+            ];
+
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, msg, keyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, msg, keyboard);
+            }
+            return;
+        }
+        actNumber = activeInfo.targetAct || 1;
     }
     await selectActFlow(chatId, user, actNumber, editMessageId);
 };
@@ -2132,8 +2189,36 @@ const handleCallbackQuery = async (callbackQuery) => {
         msg += `⏱️ Plazo: ${getContractDurationText(contract)}\n`;
         msg += `📝 Obligaciones: ${contract.activities ? contract.activities.length : 0} registradas\n\n`;
 
-        // Check if current target act requires payment
-        const { targetAct, currentPeriod } = await getContractCurrentActiveAct(user._id, contract._id, contract);
+        // Check if current target act requires payment or has transition pending
+        const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
+        if (activeInfo.hasTransitionPending) {
+            msg += `⚠️ *Aviso de Periodo:*\n`;
+            msg += `Tienes la *Cuenta ${activeInfo.unfinishedPreviousAct}* pendiente ${activeInfo.inGracePeriod ? `(⏳ Prórroga de radicación: ${activeInfo.graceDaysRemaining} día(s) restantes)` : '(por culminar)'}.\n`;
+            msg += `La *Cuenta ${activeInfo.targetAct}* ya se encuentra habilitada (${activeInfo.currentPeriod?.from} al ${activeInfo.currentPeriod?.to}).\n\n`;
+            msg += `¿Qué deseas gestionar para este contrato?`;
+
+            const keyboard = [
+                [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
+                [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
+                [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }]
+            ];
+            if (sessions.get(chatId)?.isOperator) {
+                keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+            } else {
+                keyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+            }
+
+            if (messageId) {
+                await editTelegramMessage(chatId, messageId, msg, keyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, msg, keyboard);
+            }
+            return;
+        }
+
+        const { targetAct, currentPeriod } = activeInfo;
         const access = await checkPeriodAccess(chatId, user, targetAct, currentPeriod);
 
         if (!access.allowed) {
@@ -2227,12 +2312,33 @@ const handleCallbackQuery = async (callbackQuery) => {
         const contract = await resolveActiveContract(chatId, user);
         const query = { user: user._id };
         if (contract) query.contract = contract._id;
-        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
-        if (!billingPeriod) {
+        const periods = await BillingPeriod.find(query).sort({ actNumber: 1 });
+        if (!periods || periods.length === 0) {
             await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema para este contrato.');
             return;
         }
-        await handleGenerateAndDownload(chatId, user, billingPeriod._id);
+        if (periods.length === 1) {
+            await handleGenerateAndDownload(chatId, user, periods[0]._id);
+            return;
+        }
+        const keyboard = periods.map(p => ([{
+            text: `📦 Descargar ZIP Acta N° ${p.actNumber} (${p.zipDownloaded ? 'Generada' : 'Borrador'})`,
+            callback_data: `download_zip_act_${p.actNumber}`
+        }]));
+        keyboard.push([{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]);
+        await sendTelegramKeyboardMessage(chatId, '📦 Selecciona el Acta de Cobro cuyo paquete ZIP deseas generar y descargar:', keyboard);
+        return;
+    } else if (data.startsWith('download_zip_act_')) {
+        const actNumber = parseInt(data.replace('download_zip_act_', ''), 10);
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id, actNumber };
+        if (contract) query.contract = contract._id;
+        const period = await BillingPeriod.findOne(query);
+        if (!period) {
+            await sendTelegramMessage(chatId, `⚠️ No se encontró la Cuenta de Cobro para el Acta N° ${actNumber}. Puedes iniciarla seleccionando el acta en el menú.`);
+            return;
+        }
+        await handleGenerateAndDownload(chatId, user, period._id);
         return;
     } else if (data.startsWith('generate_and_download_')) {
         const periodId = data.replace('generate_and_download_', '');
@@ -2702,15 +2808,32 @@ const handleIncomingMessage = async (message) => {
                             [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
                         ]);
                     } else {
-                        reply += `¿Qué deseas gestionar para este contrato?`;
+                        const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
+                        if (activeInfo.hasTransitionPending) {
+                            reply += `⚠️ *Aviso de Periodo:*\n`;
+                            reply += `Tienes la *Cuenta ${activeInfo.unfinishedPreviousAct}* pendiente ${activeInfo.inGracePeriod ? `(⏳ Prórroga de radicación: ${activeInfo.graceDaysRemaining} día(s) restantes)` : '(por culminar)'}.\n`;
+                            reply += `La *Cuenta ${activeInfo.targetAct}* ya se encuentra habilitada (${activeInfo.currentPeriod?.from} al ${activeInfo.currentPeriod?.to}).\n\n`;
+                            reply += `¿Qué deseas gestionar para este contrato?`;
 
-                        await sendTelegramKeyboardMessage(chatId, reply, [
-                            [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
-                            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
-                            [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
-                            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
-                            [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
-                        ]);
+                            await sendTelegramKeyboardMessage(chatId, reply, [
+                                [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
+                                [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                                [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
+                                [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                                [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }],
+                                [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                            ]);
+                        } else {
+                            reply += `¿Qué deseas gestionar para este contrato?`;
+
+                            await sendTelegramKeyboardMessage(chatId, reply, [
+                                [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+                                [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                                [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+                                [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+                                [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                            ]);
+                        }
                     }
                 } else {
                     // Multiple contracts registered for this person
@@ -3255,7 +3378,11 @@ const handleIncomingMessage = async (message) => {
                         if (extracted) {
                             if (extracted.rpNumber) contract.rp = extracted.rpNumber;
                             if (extracted.cdpNumber) contract.cdp = extracted.cdpNumber;
-                            if (extracted.rubro) contract.rubro = extracted.rubro;
+                            if (extracted.fuenteFinanciacion) contract.fuenteFinanciacion = extracted.fuenteFinanciacion;
+                            if (extracted.fuenteCodigo) contract.fuenteCodigo = extracted.fuenteCodigo;
+                            if (extracted.unidadEjecutora) contract.unidadEjecutora = extracted.unidadEjecutora;
+                            if (extracted.unidadEjecutoraCodigo) contract.unidadEjecutoraCodigo = extracted.unidadEjecutoraCodigo;
+                            if (extracted.rubro) contract.rubro = formatRubroPresupuestal(extracted.rubro, extracted.fuenteCodigo || extracted.fuenteFinanciacion);
                         }
                         await contract.save();
                         await sendTelegramMessage(chatId, `✅ Registro Presupuestal procesado con éxito.\n📋 RP N°: ${contract.rp || 'N/A'} | CDP: ${contract.cdp || 'N/A'}\n🏷️ Rubro: ${contract.rubro || 'N/A'}`);
@@ -4076,7 +4203,25 @@ const handleIncomingMessage = async (message) => {
                         [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
                     ]);
                 } else {
-                    const { targetAct, currentPeriod } = await getContractCurrentActiveAct(user._id, contract._id, contract);
+                    const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
+                    if (activeInfo.hasTransitionPending) {
+                        reply += `⚠️ *Aviso de Periodo:*\n`;
+                        reply += `Tienes la *Cuenta ${activeInfo.unfinishedPreviousAct}* pendiente ${activeInfo.inGracePeriod ? `(⏳ Prórroga de radicación: ${activeInfo.graceDaysRemaining} día(s) restantes)` : '(por culminar)'}.\n`;
+                        reply += `La *Cuenta ${activeInfo.targetAct}* ya se encuentra habilitada (${activeInfo.currentPeriod?.from} al ${activeInfo.currentPeriod?.to}).\n\n`;
+                        reply += `¿Qué deseas realizar hoy?`;
+
+                        await sendTelegramKeyboardMessage(chatId, reply, [
+                            [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
+                            [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                            [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
+                            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                            [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }],
+                            [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                        ]);
+                        return;
+                    }
+
+                    const { targetAct, currentPeriod } = activeInfo;
                     const access = await checkPeriodAccess(chatId, user, targetAct, currentPeriod);
 
                     if (!access.allowed) {
@@ -4193,14 +4338,31 @@ const handleIncomingMessage = async (message) => {
                         reply += `⚠️ Tu contrato está registrado pero aún no tiene obligaciones específicas cargadas.\n\nPuedes cargar tu minuta en PDF para extraerlas.`;
                         await sendTelegramMessage(chatId, reply);
                     } else {
-                        reply += `¿Qué deseas realizar hoy?`;
-                        await sendTelegramKeyboardMessage(chatId, reply, [
-                            [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
-                            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
-                            [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
-                            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
-                            [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
-                        ]);
+                        const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
+                        if (activeInfo.hasTransitionPending) {
+                            reply += `⚠️ *Aviso de Periodo:*\n`;
+                            reply += `Tienes la *Cuenta ${activeInfo.unfinishedPreviousAct}* pendiente ${activeInfo.inGracePeriod ? `(⏳ Prórroga de radicación: ${activeInfo.graceDaysRemaining} día(s) restantes)` : '(por culminar)'}.\n`;
+                            reply += `La *Cuenta ${activeInfo.targetAct}* ya se encuentra habilitada (${activeInfo.currentPeriod?.from} al ${activeInfo.currentPeriod?.to}).\n\n`;
+                            reply += `¿Qué deseas gestionar para este contrato?`;
+
+                            await sendTelegramKeyboardMessage(chatId, reply, [
+                                [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
+                                [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                                [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
+                                [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                                [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }],
+                                [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                            ]);
+                        } else {
+                            reply += `¿Qué deseas realizar hoy?`;
+                            await sendTelegramKeyboardMessage(chatId, reply, [
+                                [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+                                [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+                                [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+                                [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
+                                [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
+                            ]);
+                        }
                     }
                 } else {
                     let reply = `✅ ¡Cuenta vinculada exitosamente!\n\n`;
@@ -4259,14 +4421,24 @@ const handleIncomingMessage = async (message) => {
         const contract = await resolveActiveContract(chatId, user);
         const query = { user: user._id };
         if (contract) query.contract = contract._id;
-        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
+        const periods = await BillingPeriod.find(query).sort({ actNumber: 1 });
 
-        if (!billingPeriod) {
+        if (!periods || periods.length === 0) {
             await sendTelegramMessage(chatId, '📭 Aún no tienes periodos registrados en el sistema para este contrato.');
             return;
         }
 
-        await handleGenerateAndDownload(chatId, user, billingPeriod._id);
+        if (periods.length === 1) {
+            await handleGenerateAndDownload(chatId, user, periods[0]._id);
+            return;
+        }
+
+        const keyboard = periods.map(p => ([{
+            text: `📦 Descargar ZIP Acta N° ${p.actNumber} (${p.zipDownloaded ? 'Generada' : 'Borrador'})`,
+            callback_data: `download_zip_act_${p.actNumber}`
+        }]));
+        keyboard.push([{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]);
+        await sendTelegramKeyboardMessage(chatId, '📦 Selecciona el Acta de Cobro cuyo paquete ZIP deseas generar y descargar:', keyboard);
         return;
     } else if (
         text === '/word' ||
