@@ -637,6 +637,20 @@ const ContractSetup = () => {
                                         Este texto se insertará exactamente en el campo "Plazo de Ejecución" del Informe de Actividades.
                                     </small>
                                 </div>
+                                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <label className="label">Valor y Forma de Pago (Texto literal de la Minuta / Apartado 4)</label>
+                                    <textarea 
+                                        className="input" 
+                                        rows={4}
+                                        style={{ resize: 'vertical', lineHeight: '1.4' }}
+                                        placeholder="Ej: Once Millones Doscientos mil pesos M/Cte. ($11.200.000), pagaderos de la siguiente manera: Cuatro Pagos (04) pago por valor de Dos Millones Ochocientos Mil Pesos M/Cte. ($2.800.000), previa verificación del pago de la seguridad social y entrega a satisfacción del informe de actividades realizadas y visto bueno por parte del funcionario encargado de ejercer la vigilancia y control. NOTA: El último pago queda supeditado a la entrega de la totalidad de los archivos y documentos correspondientes a la ejecución contractual cuando haya lugar. No obstante, la forma de pago prevista, queda sujeta a la situación de los recursos del plan anual mensualizado de caja PAC."
+                                        value={contract.paymentTerms || ''} 
+                                        onChange={(e) => setContract({...contract, paymentTerms: e.target.value})} 
+                                    />
+                                    <small style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                                        Este párrafo completo se insertará exactamente en el campo "FORMA DE PAGO:" del Certificado del Supervisor y del Informe de Actividades.
+                                    </small>
+                                </div>
                             </div>
                         </div>
 

@@ -3115,6 +3115,7 @@ const handleIncomingMessage = async (message) => {
                         if (extracted.startDate) newContract.startDate = extracted.startDate;
                         if (extracted.endDate) newContract.endDate = extracted.endDate;
                         if (extracted.executionTerm) newContract.executionTerm = extracted.executionTerm;
+                        if (extracted.paymentTerms) newContract.paymentTerms = extracted.paymentTerms;
                         if (extracted.periodType) newContract.periodType = extracted.periodType;
                         if (extracted.initialDurationMonths) newContract.initialDurationMonths = Number(extracted.initialDurationMonths);
                         if (extracted.cdp) newContract.cdp = extracted.cdp;
@@ -3234,6 +3235,7 @@ const handleIncomingMessage = async (message) => {
                         if (extracted.startDate) contract.startDate = extracted.startDate;
                         if (extracted.endDate) contract.endDate = extracted.endDate;
                         if (extracted.executionTerm) contract.executionTerm = extracted.executionTerm;
+                        if (extracted.paymentTerms) contract.paymentTerms = extracted.paymentTerms;
                         if (extracted.periodType) contract.periodType = extracted.periodType;
                         if (extracted.initialDurationMonths) contract.initialDurationMonths = Number(extracted.initialDurationMonths);
                         if (extracted.cdp) contract.cdp = extracted.cdp;

@@ -562,7 +562,7 @@ exports.updateContract = async (req, res) => {
             'periodType', 'initialDurationMonths', 'additionDurationMonths', 'hasAddition',
             'additionValue', 'additionValueWord', 'additionStartDate', 'additionEndDate',
             'additionCdp', 'additionRp', 'additionRubro', 'additionDuration',
-            'executionTerm', 'unidadEjecutora', 'unidadEjecutoraCodigo', 'unidadContratacion',
+            'executionTerm', 'paymentTerms', 'unidadEjecutora', 'unidadEjecutoraCodigo', 'unidadContratacion',
             'fuenteFinanciacion', 'fuenteCodigo',
             'customDeliveryDate', 'deliveryNotes'
         ];
@@ -572,6 +572,10 @@ exports.updateContract = async (req, res) => {
                 contract[field] = req.body[field];
             }
         });
+
+        if (req.body.formaPago !== undefined && req.body.paymentTerms === undefined) {
+            contract.paymentTerms = req.body.formaPago;
+        }
 
         if (contract.rubro) {
             contract.rubro = formatRubroPresupuestal(contract.rubro, contract.fuenteCodigo || contract.fuenteFinanciacion);

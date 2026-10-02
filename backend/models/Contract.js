@@ -132,6 +132,10 @@ const contractSchema = new mongoose.Schema({
         type: String,
         default: ""
     },
+    paymentTerms: {
+        type: String,
+        default: ""
+    },
     additionDurationMonths: {
         type: Number,
         default: 0

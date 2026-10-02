@@ -371,17 +371,33 @@ const generateBillingPackage = async (periodId, userId) => {
         const chkProveedor = isProveedor ? "[ X ]" : "[   ]";
         const chkOtro = isOtro ? "[ X ]" : "[   ]";
 
-        // Forma de pago formatted description
-        const formaPagoText = contract.paymentMethod
-            ? (contract.paymentMethod.toLowerCase().includes('cuenta')
-                ? `${contract.paymentMethod} No. ${contract.accountNumber || ''}`
-                : `Transferencia Cuenta ${contract.paymentMethod} No. ${contract.accountNumber || ''}`)
-            : (contract.accountNumber ? `Transferencia Cuenta No. ${contract.accountNumber}` : 'Transferencia Electrónica');
-
         // Formatted currency strings
         const totalValFormatted = Number(contract.totalValue || 0).toLocaleString('es-CO');
         const monthlyValFormatted = Number(contract.monthlyValue || 0).toLocaleString('es-CO');
         const remainingValFormatted = remainingVal.toLocaleString('es-CO');
+
+        // Forma de pago respetando el párrafo completo del apartado 4 (VALOR Y FORMA DE PAGO) de la minuta
+        let formaPagoText = (contract.paymentTerms || contract.formaPago || '').trim();
+        formaPagoText = formaPagoText.replace(/^(CUARTA|CL[AÁ]USULA\s+CUARTA)[.\s:]*(VALOR\s+Y\s+FORMA\s+DE\s+PAGO)?:?\s*/i, '').trim();
+
+        if (!formaPagoText) {
+            const totalWord = (contract.totalValueWord || '').trim();
+            const numPagos = contract.initialDurationMonths || 4;
+            const numPagosPadded = String(numPagos).padStart(2, '0');
+            const monthlyWord = (contract.monthlyValueWord || '').trim();
+
+            if (totalValFormatted && totalValFormatted !== '0' && monthlyValFormatted && monthlyValFormatted !== '0') {
+                const totalStr = totalWord ? `${totalWord} ($${totalValFormatted})` : `$${totalValFormatted}`;
+                const monthlyStr = monthlyWord ? `${monthlyWord} ($${monthlyValFormatted})` : `$${monthlyValFormatted}`;
+                formaPagoText = `${totalStr}, pagaderos de la siguiente manera: ${numPagos} Pagos (${numPagosPadded}) pago por valor de ${monthlyStr}, previa verificación del pago de la seguridad social y entrega a satisfacción del informe de actividades realizadas y visto bueno por parte del funcionario encargado de ejercer la vigilancia y control. NOTA: El último pago queda supeditado a la entrega de la totalidad de los archivos y documentos correspondientes a la ejecución contractual cuando haya lugar. No obstante, la forma de pago prevista, queda sujeta a la situación de los recursos del plan anual mensualizado de caja PAC.`;
+            } else {
+                formaPagoText = contract.paymentMethod
+                    ? (contract.paymentMethod.toLowerCase().includes('cuenta')
+                        ? `${contract.paymentMethod} No. ${contract.accountNumber || ''}`
+                        : `Transferencia Cuenta ${contract.paymentMethod} No. ${contract.accountNumber || ''}`)
+                    : (contract.accountNumber ? `Transferencia Cuenta No. ${contract.accountNumber}` : 'Transferencia Electrónica');
+            }
+        }
 
         // Security Social values formatting with intelligent fallbacks
         const ssOperator = ssData.operator || period.securitySocial?.operator || 'SIMPLE';
