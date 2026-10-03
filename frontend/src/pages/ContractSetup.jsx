@@ -96,6 +96,9 @@ const ContractSetup = () => {
 
         const formData = new FormData();
         formData.append('additionRpFile', file);
+        if (contract?._id) {
+            formData.append('contractId', contract._id);
+        }
 
         setUploadingAddRp(true);
         setError('');
@@ -145,6 +148,9 @@ const ContractSetup = () => {
 
         const formData = new FormData();
         formData.append('rpFile', file);
+        if (contract?._id) {
+            formData.append('contractId', contract._id);
+        }
 
         setUploadingRp(true);
         setError('');
@@ -400,7 +406,7 @@ const ContractSetup = () => {
                                         value={contract.rubro || ''} 
                                         onChange={(e) => setContract({...contract, rubro: e.target.value})} 
                                         onBlur={(e) => {
-                                            const formatted = formatRubroPresupuestal(e.target.value);
+                                            const formatted = formatRubroPresupuestal(e.target.value, contract.fuenteCodigo || contract.fuenteFinanciacion);
                                             if (formatted && formatted !== e.target.value) {
                                                 setContract(prev => ({ ...prev, rubro: formatted }));
                                             }
@@ -409,7 +415,7 @@ const ContractSetup = () => {
                                     />
                                     {contract.rubro && (
                                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                                            💡 Se plasmará en el Certificado del Supervisor como: <strong style={{ color: 'var(--text-main)' }}>{formatRubroPresupuestal(contract.rubro)}</strong>
+                                            💡 Se plasmará en el Certificado del Supervisor como: <strong style={{ color: 'var(--text-main)' }}>{formatRubroPresupuestal(contract.rubro, contract.fuenteCodigo || contract.fuenteFinanciacion)}</strong>
                                         </div>
                                     )}
                                 </div>
@@ -682,10 +688,10 @@ const ContractSetup = () => {
                                     </label>
                                 </div>
                                 <div style={{ padding: '1rem', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-                                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>Sube el Registro Presupuestal RP de Adición (PDF)</p>
+                                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>Sube el Registro Presupuestal RP de Adición (PDF/Imagen)</p>
                                     <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--accent)', color: 'var(--accent)', cursor: 'pointer' }}>
-                                        {uploadingAddRp ? 'Procesando...' : (contract.additionRp ? 'Reemplazar RP PDF' : 'Subir RP Adición')}
-                                        <input type="file" style={{ display: 'none' }} onChange={handleAdditionRpUpload} accept=".pdf" disabled={uploadingAddRp} />
+                                        {uploadingAddRp ? 'Procesando...' : (contract.additionRp ? 'Reemplazar RP' : 'Subir RP Adición')}
+                                        <input type="file" style={{ display: 'none' }} onChange={handleAdditionRpUpload} accept=".pdf,.jpg,.jpeg,.png" disabled={uploadingAddRp} />
                                     </label>
                                 </div>
                             </div>
@@ -726,7 +732,18 @@ const ContractSetup = () => {
                                     </div>
                                     <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                                         <label className="label">Rubro Presupuestal de la Adición</label>
-                                        <input className="input" value={contract.additionRubro || ''} onChange={(e) => setContract({...contract, additionRubro: e.target.value})} />
+                                        <input 
+                                            className="input" 
+                                            value={contract.additionRubro || ''} 
+                                            onChange={(e) => setContract({...contract, additionRubro: e.target.value})} 
+                                            onBlur={(e) => {
+                                                const formatted = formatRubroPresupuestal(e.target.value, contract.fuenteCodigo || contract.fuenteFinanciacion);
+                                                if (formatted && formatted !== e.target.value) {
+                                                    setContract(prev => ({ ...prev, additionRubro: formatted }));
+                                                }
+                                            }}
+                                            placeholder="Ej: 2.3.2.02.02.009.4599007.077 - 001"
+                                        />
                                     </div>
                                 </div>
                             )}
@@ -759,8 +776,8 @@ const ContractSetup = () => {
                                         {contract.rp ? `RP No. ${contract.rp}` : 'Extrae RP, CDP y Rubro'}
                                     </p>
                                     <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: uploadingRp ? 0.7 : 1 }}>
-                                        {uploadingRp ? '⏳ Procesando...' : contract.rpPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir PDF'}
-                                        <input type="file" style={{ display: 'none' }} onChange={handleRpUpload} accept=".pdf" disabled={uploadingRp} />
+                                        {uploadingRp ? '⏳ Procesando...' : contract.rpPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir RP (PDF/Img)'}
+                                        <input type="file" style={{ display: 'none' }} onChange={handleRpUpload} accept=".pdf,.jpg,.jpeg,.png" disabled={uploadingRp} />
                                     </label>
                                 </div>
 

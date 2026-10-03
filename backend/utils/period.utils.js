@@ -588,24 +588,31 @@ function formatRubroPresupuestal(rawRubro = '', rawFuente = '') {
     // Remover el rubroCode para evitar colisiones con números internos como .009.
     const remainingText = fullText.replace(rubroCode, ' ');
 
-    // 3. Extraer código de la fuente (ej: 001 - RECURSOS PROPIOS, 001, etc.)
+    // 3. Extraer código de la fuente (ej: 001 - RECURSOS PROPIOS, 001 RECURSOS PROPIOS, 001, etc.)
     let fuenteCode = '';
-    const fuentePattern1 = remainingText.match(/(\d{1,4})\s*[-–]\s*(?:RECURSOS|ICLD|SGP|INGRESOS|PROPIOS)/i);
-    const fuentePattern2 = remainingText.match(/(?:RECURSOS|FUENTE|FTE)[\s:]*(\d{1,4})/i);
-    const fuentePattern3 = (rawFuente || '').match(/\b(\d{1,4})\b/);
-    const fuentePattern4 = remainingText.match(/\b(00[1-9]|0[1-9]\d|[1-9]\d{2})\b/);
 
-    if (fuentePattern1) {
-        fuenteCode = fuentePattern1[1];
-    } else if (fuentePattern2) {
-        fuenteCode = fuentePattern2[1];
-    } else if (fuentePattern3) {
-        fuenteCode = fuentePattern3[1];
-    } else if (fuentePattern4) {
-        fuenteCode = fuentePattern4[1];
-    } else if (/RECURSOS\s+PROPIOS|PROPIOS|ICLD/i.test(fullText)) {
-        // Fallback estándar en entidades territoriales colombianas: Recursos Propios = 001
-        fuenteCode = '001';
+    if (rawFuente) {
+        const directMatch = String(rawFuente).match(/\b(\d{1,4})\b/);
+        if (directMatch) {
+            fuenteCode = directMatch[1];
+        }
+    }
+
+    if (!fuenteCode) {
+        const fuentePattern1 = remainingText.match(/\b(\d{1,4})\s*[-–]?\s*(?:RECURSOS|ICLD|SGP|INGRESOS|PROPIOS|FONPET|CREDITO)\b/i);
+        const fuentePattern2 = remainingText.match(/(?:RECURSOS|FUENTE|FTE|PAGO|FINANCIACI[OÓ]N)[\s:]*(\d{1,4})\b/i);
+        const fuentePattern3 = remainingText.match(/\b(00[1-9]|0[1-9]\d|[1-9]\d{2})\b/);
+
+        if (fuentePattern1) {
+            fuenteCode = fuentePattern1[1];
+        } else if (fuentePattern2) {
+            fuenteCode = fuentePattern2[1];
+        } else if (fuentePattern3) {
+            fuenteCode = fuentePattern3[1];
+        } else if (/RECURSOS\s+PROPIOS|PROPIOS|ICLD/i.test(fullText)) {
+            // Fallback estándar en entidades territoriales colombianas: Recursos Propios = 001
+            fuenteCode = '001';
+        }
     }
 
     if (fuenteCode && fuenteCode.length <= 3) {
@@ -613,7 +620,7 @@ function formatRubroPresupuestal(rawRubro = '', rawFuente = '') {
     }
 
     if (rubroCode && fuenteCode) {
-        return rubroCode + ' - ' + fuenteCode;
+        return `${rubroCode} - ${fuenteCode}`;
     }
     return rubroCode;
 }

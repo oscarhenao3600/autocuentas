@@ -9,7 +9,7 @@ require("dotenv").config();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const generateAIContent = async (contents) => {
-    const candidateModels = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"];
+    const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
     let lastError = null;
 
     for (const modelName of candidateModels) {
@@ -130,7 +130,7 @@ exports.extractContractData = async (filePath, options = {}) => {
 
 exports.extractRpData = async (filePath, options = {}) => {
     try {
-        const { buffer: dataBuffer, isPdf } = await resolveInputBuffer(filePath, options);
+        const { buffer: dataBuffer, filename, isPdf, isImage } = await resolveInputBuffer(filePath, options);
         let text = "";
         let useMultimodal = false;
 
@@ -144,37 +144,40 @@ exports.extractRpData = async (filePath, options = {}) => {
                 console.warn("Extracción de texto RP falló, usando Gemini multimodal OCR:", err.message);
                 useMultimodal = true;
             }
+        } else if (isImage) {
+            useMultimodal = true;
         } else {
             text = dataBuffer.toString();
         }
 
         const prompt = `
-            Analiza el siguiente texto de un documento de Registro Presupuestal (RP) y extrae la información en formato JSON puro (sin markdown). 
+            Analiza el siguiente documento de Registro Presupuestal (RP) y extrae la información en formato JSON puro (sin markdown). 
             Extrae SOLO los campos que encuentres. Si no encuentras un dato, déjalo como string vacío "".
             
             Campos requeridos:
-            - rpNumber (Número de Registro Presupuestal - RP, ej: 00762)
-            - cdpNumber (Número de Certificado de Disponibilidad Presupuestal - CDP)
-            - rubro (Código completo del Rubro Presupuestal estructurado con su fuente de financiación en formato exacto 'RUBRO - FUENTE', ej: '2.3.2.02.02.009.4599007.077 - 001'. Si en el RP aparece '2.3.2.02.02.009.4599007.077 ... 001 - RECURSOS PROPIOS', extrae y unifica el código del rubro y el código de la fuente como '2.3.2.02.02.009.4599007.077 - 001')
+            - rpNumber (Número de Registro Presupuestal - RP, ej: 04412 o 00762)
+            - cdpNumber (Número de Certificado de Disponibilidad Presupuestal - CDP, ej: 4499)
+            - rubro (Código completo del Rubro Presupuestal estructurado combinando OBLIGATORIAMENTE el código de la columna 'Rubro' con el código numérico de la columna 'Fuente de pago' en formato 'RUBRO - CODIGO_FUENTE', ej: '2.3.2.02.02.009.4599007.077 - 001'. IMPORTANTE: En la tabla del RP, busca la columna 'Rubro' [ej: 2.3.2.02.02.009.4599007.077] y la columna 'Fuente de pago' [ej: 001 RECURSOS PROPIOS]. El rubro final DEBE contener ambos unidos con guion: '2.3.2.02.02.009.4599007.077 - 001')
             - rubroCodigo (El código numérico principal del rubro sin la fuente, ej: '2.3.2.02.02.009.4599007.077')
-            - fuenteFinanciacion (Texto de la fuente de financiación si figura, ej: '001 - RECURSOS PROPIOS')
-            - fuenteCodigo (Código numérico de la fuente de financiación, ej: '001')
-            - rubroNombre (La descripción o nombre del rubro o proyecto, ej: 'ARMENIA VIVE TIC: HACIA UN TERRITOR')
-            - rpDate (Fecha de expedición o registro del RP)
+            - fuenteFinanciacion (Texto completo de la columna 'Fuente de pago' o fuente de financiación, ej: '001 RECURSOS PROPIOS')
+            - fuenteCodigo (Código numérico de la fuente de pago/financiación, ej: '001')
+            - rubroNombre (La descripción o nombre del rubro en la columna 'Descripción Rubro', ej: 'ARMENIA VIVE TIC: HACIA UN TERRITOR')
+            - rpDate (Fecha de expedición o registro del RP, ej: '2026-05-12')
             - unidadEjecutora (Texto literal del campo 'UNIDAD EJECUTORA' si figura en el encabezado del RP, ej: "11401 - SECRETARIA TIC" o "11201 - SECRETARIA DE HACIENDA")
             - unidadEjecutoraCodigo (El código numérico de la unidad ejecutora, ej: "11401")
             - unidadEjecutoraNombre (El nombre de la unidad ejecutora, ej: "SECRETARIA TIC")
         `;
 
         let result;
-        if (useMultimodal && isPdf) {
-            const pdfPart = {
+        if (useMultimodal) {
+            const mimeType = isPdf ? "application/pdf" : (options.mimetype || (filename && filename.toLowerCase().endsWith('.png') ? "image/png" : "image/jpeg"));
+            const filePart = {
                 inlineData: {
                     data: dataBuffer.toString("base64"),
-                    mimeType: "application/pdf"
+                    mimeType: mimeType
                 }
             };
-            result = await generateAIContent([prompt, pdfPart]);
+            result = await generateAIContent([prompt, filePart]);
         } else {
             result = await generateAIContent(`${prompt}\n\nTexto del RP:\n${text.substring(0, 20000)}`);
         }
