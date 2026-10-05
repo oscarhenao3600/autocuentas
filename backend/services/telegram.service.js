@@ -473,7 +473,7 @@ const checkPeriodAccess = async (chatId, activeUser, actNumber, period = null) =
 /**
  * Generates all 4 Word docs + ZIP package and sends it via Telegram
  */
-const handleGenerateAndDownload = async (chatId, user, periodId) => {
+const handleGenerateAndDownload = async (chatId, user, periodId, options = {}) => {
     try {
         const periodCheck = await BillingPeriod.findById(periodId);
         if (periodCheck && periodCheck.actNumber > 1) {
@@ -484,9 +484,39 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
             }
         }
 
-        await sendTelegramMessage(chatId, '⚙️ Generando tus 4 formatos oficiales, los documentos "Anexo Descripción" con IA para cada obligación y empaquetando soportes...');
+        const contract = (periodCheck && periodCheck.contract) 
+            ? await Contract.findById(periodCheck.contract) 
+            : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
 
-        const { period, zipPath } = await generateBillingPackage(periodId, user._id);
+        const isTicContract = /tic|tecnolog/i.test(contract?.supervisorDependency || '') ||
+                              /tic|tecnolog/i.test(contract?.unidadEjecutora || '') ||
+                              Boolean(contract?.isTicContract);
+
+        // Si es contratista de Secretaría TIC y aún no ha confirmado si desea subir a NextCloud
+        if (isTicContract && options.confirmedNextcloud === undefined) {
+            await sendTelegramKeyboardMessage(chatId, 
+                `🏛️ *Secretaría TIC - Alcaldía de Armenia*\n\n` +
+                `¿Deseas enviar tus documentos oficiales y evidencias directamente a la *NAS de Nextcloud* (CUENTA ${periodCheck.actNumber}) y generar los pantallazos oficiales para tu Informe de Actividades?\n\n` +
+                `• *Sí, subir a la NAS y capturar*: Creará las carpetas en Nextcloud, subirá soportes, tomará capturas de pantalla de cada obligación e insertará los pantallazos en tu Informe de Actividades.\n` +
+                `• *No, generar cuenta tradicional*: Generará el paquete habitual con fotos individuales y comentarios habituales.`,
+                [
+                    [{ text: '☁️ Sí, subir a la NAS y capturar', callback_data: `gen_tic_yes_${periodId}` }],
+                    [{ text: '📄 No, generar cuenta tradicional', callback_data: `gen_tic_no_${periodId}` }],
+                    [{ text: '❌ Cancelar', callback_data: `summary_${periodId}` }]
+                ]
+            );
+            return;
+        }
+
+        const sendToNextcloud = Boolean(options.sendToNextcloud && isTicContract);
+
+        if (sendToNextcloud) {
+            await sendTelegramMessage(chatId, '☁️ Conectando con Nextcloud NAS, creando carpetas, subiendo evidencias y tomando capturas oficiales...');
+        } else {
+            await sendTelegramMessage(chatId, '⚙️ Generando tus 4 formatos oficiales, los documentos "Anexo Descripción" con IA para cada obligación y empaquetando soportes...');
+        }
+
+        const { period, zipPath } = await generateBillingPackage(periodId, user._id, { sendToNextcloud });
 
         if (zipPath && (storageService.extractDriveId(zipPath) || fs.existsSync(zipPath))) {
             // Count towards provider monthly usage if applicable
@@ -517,7 +547,12 @@ const handleGenerateAndDownload = async (chatId, user, periodId) => {
                 await checkAndAdvancePaymentStatus(user, activeContract);
             }
 
-            await sendTelegramKeyboardMessage(chatId, `✅ Paquete de Cobro entregado en formato ZIP.\n\nIncluye:\n• 4 Formatos oficiales Word (.docx)\n• Documentos "Anexo Descripción #[obligación]" con redacción técnica de 100-150 palabras y fotos/pantallazos de soporte\n• Carpetas organizadas con todos tus soportes`, [
+            let ticMsg = '';
+            if (sendToNextcloud) {
+                ticMsg = '\n\n☁️ *Soportes y documentos oficiales subidos exitosamente a tu carpeta en la NAS de Nextcloud*.';
+            }
+
+            await sendTelegramKeyboardMessage(chatId, `✅ Paquete de Cobro entregado en formato ZIP.${ticMsg}\n\nIncluye:\n• 4 Formatos oficiales Word (.docx)\n• Documentos "Anexo Descripción #[obligación]" con redacción técnica de 100-150 palabras y fotos/pantallazos de soporte\n• Carpetas organizadas con todos tus soportes`, [
                 [{ text: '📊 Volver al Resumen del Acta', callback_data: `summary_${period._id}` }],
                 [{ text: '📁 Ver Menú de Actas', callback_data: 'show_acts_menu' }]
             ]);
@@ -1582,6 +1617,12 @@ const showPeriodSummary = async (chatId, periodId, editMessageId = null) => {
             text += `Seguridad Social: No registrada (Puedes subirla directamente por aquí)\n`;
         }
 
+        if (period.securitySocialReceiptPath) {
+            text += `Comprobante de Pago SS: Registrado ✓\n`;
+        } else {
+            text += `Comprobante de Pago SS: Pendiente (recibo bancario/PSE)\n`;
+        }
+
         const hasPlanilla = !!(period.securitySocial && (period.securitySocial.planillaNumber || period.securitySocialPath));
         const allObligationsReady = totalCount > 0 && readyCount === totalCount;
         const isComplete = allObligationsReady && hasPlanilla;
@@ -1603,8 +1644,8 @@ const showPeriodSummary = async (chatId, periodId, editMessageId = null) => {
         }
 
         keyboard.push([
-            { text: period.securitySocial?.planillaNumber ? '🔄 Actualizar Planilla SS' : '🏥 Subir Planilla SS', callback_data: `upload_planilla_${period._id}` },
-            { text: '📋 Ver Obligaciones', callback_data: `select_act_${period.actNumber}` }
+            { text: period.securitySocial?.planillaNumber ? '🔄 Planilla SS' : '🏥 Subir Planilla SS', callback_data: `upload_planilla_${period._id}` },
+            { text: period.securitySocialReceiptPath ? '🔄 Comprobante SS' : '🧾 Subir Comprobante SS', callback_data: `upload_comprobante_${period._id}` }
         ]);
         keyboard.push([
             { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' },
@@ -1780,6 +1821,56 @@ const promptPeriodPlanilla = async (chatId, periodId) => {
         console.error('Error en promptPeriodPlanilla:', err);
         await sendTelegramMessage(chatId, '❌ Error al solicitar la planilla.');
     }
+};
+
+/**
+ * Prompts user for Comprobante de Pago de Seguridad Social for a specific BillingPeriod (Acta)
+ */
+const promptPeriodComprobante = async (chatId, periodId) => {
+    try {
+        const period = await BillingPeriod.findById(periodId);
+        if (!period) {
+            await sendTelegramMessage(chatId, '⚠️ Periodo no encontrado.');
+            return;
+        }
+
+        sessions.set(chatId, {
+            state: 'awaiting_period_comprobante_ss',
+            periodId: period._id,
+            actNumber: period.actNumber
+        });
+
+        let text = `🧾 *Comprobante de Pago de Seguridad Social*\nActa de Cobro N. ${period.actNumber}\n\n`;
+        text += `Por favor, adjunta el archivo PDF o foto del **comprobante de pago bancario** de tu planilla (soporte PSE, transferencia bancaria, recibo de caja, etc.).\n\n`;
+        text += `💡 Si aún no lo tienes o deseas omitirlo por el momento, presiona "Omitir por ahora":`;
+
+        await sendTelegramKeyboardMessage(chatId, text, [
+            [{ text: '⏩ Omitir por ahora', callback_data: `skip_comprobante_${period._id}` }],
+            [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }]
+        ]);
+    } catch (err) {
+        console.error('Error en promptPeriodComprobante:', err);
+        await sendTelegramMessage(chatId, '❌ Error al solicitar el comprobante de pago.');
+    }
+};
+
+/**
+ * Prompts user for Comprobante de Pago de Seguridad Social during initial onboarding
+ */
+const promptDocComprobante = async (chatId, user, billingPeriodId = null) => {
+    sessions.set(chatId, {
+        state: 'awaiting_doc_comprobante_ss',
+        userId: user._id,
+        billingPeriodId
+    });
+
+    let text = `🧾 *Paso 7 de 7: Comprobante de Pago de Seguridad Social* (PDF o Imagen)\n\n`;
+    text += `Por favor, adjunta el recibo o comprobante de pago bancario de tu planilla (soporte PSE, transferencia bancaria, recibo de caja, etc.).\n\n`;
+    text += `💡 Puedes escribir "saltar" o presionar el botón abajo si no lo tienes a la mano:`;
+
+    await sendTelegramKeyboardMessage(chatId, text, [
+        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_comprobante' }]
+    ]);
 };
 
 /**
@@ -2149,6 +2240,10 @@ const handleCallbackQuery = async (callbackQuery) => {
         return;
     } else if (data === 'skip_doc_planilla') {
         await sendTelegramMessage(chatId, '⏩ Planilla de Seguridad Social omitida.');
+        if (user) await promptDocComprobante(chatId, user);
+        return;
+    } else if (data === 'skip_doc_comprobante') {
+        await sendTelegramMessage(chatId, '⏩ Comprobante de pago omitido.');
         if (user) await finishDocsFlow(chatId, user);
         return;
     }
@@ -2363,6 +2458,24 @@ const handleCallbackQuery = async (callbackQuery) => {
         const periodId = data.replace('upload_planilla_', '');
         await promptPeriodPlanilla(chatId, periodId);
         return;
+    } else if (data.startsWith('upload_comprobante_')) {
+        const periodId = data.replace('upload_comprobante_', '');
+        await promptPeriodComprobante(chatId, periodId);
+        return;
+    } else if (data.startsWith('skip_comprobante_')) {
+        const periodId = data.replace('skip_comprobante_', '');
+        await sendTelegramMessage(chatId, '⏩ Comprobante de pago omitido por el momento.');
+        sessions.set(chatId, { state: 'idle' });
+        await showPeriodSummary(chatId, periodId);
+        return;
+    } else if (data.startsWith('gen_tic_yes_')) {
+        const periodId = data.replace('gen_tic_yes_', '');
+        await handleGenerateAndDownload(chatId, user, periodId, { sendToNextcloud: true, confirmedNextcloud: true });
+        return;
+    } else if (data.startsWith('gen_tic_no_')) {
+        const periodId = data.replace('gen_tic_no_', '');
+        await handleGenerateAndDownload(chatId, user, periodId, { sendToNextcloud: false, confirmedNextcloud: true });
+        return;
     } else if (data.startsWith('add_more_ev_') || data.startsWith('quick_add_ev_')) {
         const parts = data.split('_');
         const index = parseInt(parts[3], 10);
@@ -2419,6 +2532,15 @@ function isPlanilla(str) {
     if (!str) return false;
     const clean = str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
     return /^((\/)?planilla|seguridad\s*social|pila|(subir|cargar|adjuntar|actualizar)\s*(mi\s*)?(planilla|seguridad\s*social|pila|aportes?))(\s.*)?$/i.test(clean);
+}
+
+/**
+ * Checks if incoming text requests to upload or check comprobante de pago de seguridad social
+ */
+function isComprobante(str) {
+    if (!str) return false;
+    const clean = str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    return /^((\/)?comprobante|recibo(\s*de\s*pago)?|soporte\s*de\s*pago|(subir|cargar|adjuntar|actualizar)\s*(el\s*)?(comprobante|recibo|soporte\s*de\s*pago))(\s.*)?$/i.test(clean);
 }
 
 /**
@@ -3677,7 +3799,7 @@ const handleIncomingMessage = async (message) => {
 
             if (isSkip(text)) {
                 await sendTelegramMessage(chatId, '⏩ Planilla de Seguridad Social omitida.');
-                await finishDocsFlow(chatId, user);
+                await promptDocComprobante(chatId, user);
                 return;
             }
 
@@ -3769,7 +3891,7 @@ const handleIncomingMessage = async (message) => {
                 console.error('Error al procesar Planilla SS:', err);
                 await sendTelegramMessage(chatId, `❌ Error al procesar archivo: ${err.message}`);
             }
-            await finishDocsFlow(chatId, user);
+            await promptDocComprobante(chatId, user, billingPeriod?._id);
             return;
         }
 
@@ -3784,7 +3906,7 @@ const handleIncomingMessage = async (message) => {
 
             if (isSkip(text)) {
                 await sendTelegramMessage(chatId, '⏩ Planilla de Seguridad Social omitida.');
-                await finishDocsFlow(chatId, user);
+                await promptDocComprobante(chatId, user, session.pendingBillingPeriodId);
                 return;
             }
 
@@ -3836,7 +3958,7 @@ const handleIncomingMessage = async (message) => {
                     if (extracted.arlPaid) ssMsg += `  • ARL: $${Number(extracted.arlPaid).toLocaleString('es-CO')}\n`;
                 }
                 await sendTelegramMessage(chatId, ssMsg);
-                await finishDocsFlow(chatId, user);
+                await promptDocComprobante(chatId, user, billingPeriod?._id);
                 return;
             } catch (passErr) {
                 if (passErr.code === 'PASSWORD_REQUIRED') {
@@ -3846,9 +3968,53 @@ const handleIncomingMessage = async (message) => {
                     return;
                 }
                 await sendTelegramMessage(chatId, `⚠️ Error al procesar planilla: ${passErr.message}`);
+                await promptDocComprobante(chatId, user, session.pendingBillingPeriodId);
+                return;
+            }
+        }
+
+        // Doc Step 7: Comprobante de Pago de Seguridad Social (Initial Onboarding)
+        if (session.state === 'awaiting_doc_comprobante_ss') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            if (isSkip(text)) {
+                await sendTelegramMessage(chatId, '⏩ Comprobante de pago omitido.');
                 await finishDocsFlow(chatId, user);
                 return;
             }
+
+            const media = extractTelegramFile(message);
+            if (!media) {
+                await sendTelegramKeyboardMessage(chatId, '⚠️ Por favor adjunta el archivo PDF o foto de tu comprobante de pago de seguridad social, o presiona saltar para finalizar:', [
+                    [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_comprobante' }]
+                ]);
+                return;
+            }
+
+            await sendTelegramMessage(chatId, '⏳ Descargando y guardando comprobante de pago de seguridad social...');
+            try {
+                const fileInfo = await downloadTelegramMedia(media.fileId, 'comprobante_ss', media.originalName, media.mimeType);
+                let billingPeriod = session.billingPeriodId ? await BillingPeriod.findById(session.billingPeriodId) : null;
+                if (!billingPeriod) {
+                    billingPeriod = await BillingPeriod.findOne({ user: user._id }).sort({ createdAt: -1 });
+                }
+                if (billingPeriod) {
+                    billingPeriod.securitySocialReceiptPath = fileInfo.relativePath;
+                    await billingPeriod.save();
+                }
+
+                await sendTelegramMessage(chatId, '✅ ¡Comprobante de pago de seguridad social guardado con éxito!');
+            } catch (err) {
+                console.error('Error al guardar comprobante de pago SS:', err);
+                await sendTelegramMessage(chatId, `⚠️ No se pudo guardar el comprobante: ${err.message}`);
+            }
+            await finishDocsFlow(chatId, user);
+            return;
         }
 
         // Upload Planilla for a specific BillingPeriod (Acta)
@@ -3949,8 +4115,7 @@ const handleIncomingMessage = async (message) => {
                     }
                 }
 
-                sessions.set(chatId, { state: 'idle' });
-                await showPeriodSummary(chatId, period._id);
+                await promptPeriodComprobante(chatId, period._id);
                 return;
             } catch (err) {
                 console.error('Error al procesar planilla de periodo:', err);
@@ -4021,8 +4186,7 @@ const handleIncomingMessage = async (message) => {
                     await sendTelegramMessage(chatId, ssMsg);
                 }
 
-                sessions.set(chatId, { state: 'idle' });
-                await showPeriodSummary(chatId, period._id);
+                await promptPeriodComprobante(chatId, period._id);
                 return;
             } catch (passErr) {
                 if (passErr.code === 'PASSWORD_REQUIRED') {
@@ -4032,6 +4196,65 @@ const handleIncomingMessage = async (message) => {
                     return;
                 }
                 await sendTelegramMessage(chatId, `⚠️ Error al procesar planilla: ${passErr.message}`);
+                sessions.set(chatId, { state: 'idle' });
+                if (periodId) await showPeriodSummary(chatId, periodId);
+                return;
+            }
+        }
+
+        // Upload Comprobante SS for a specific BillingPeriod (Acta)
+        if (session.state === 'awaiting_period_comprobante_ss') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            const periodId = session.periodId;
+            if (isNegative(text) || text.toLowerCase() === 'cancelar') {
+                sessions.set(chatId, { state: 'idle' });
+                await sendTelegramMessage(chatId, '❌ Carga de comprobante cancelada.');
+                if (periodId) await showPeriodSummary(chatId, periodId);
+                return;
+            }
+
+            if (isSkip(text) || text.toLowerCase() === 'omitir' || text.toLowerCase() === 'saltar') {
+                sessions.set(chatId, { state: 'idle' });
+                await sendTelegramMessage(chatId, '⏩ Comprobante de pago omitido por el momento.');
+                if (periodId) await showPeriodSummary(chatId, periodId);
+                return;
+            }
+
+            const media = extractTelegramFile(message);
+            if (!media) {
+                await sendTelegramKeyboardMessage(chatId, '⚠️ Por favor adjunta el archivo PDF o foto de tu comprobante de pago de seguridad social, o presiona Omitir:', [
+                    [{ text: '⏩ Omitir por ahora', callback_data: `skip_comprobante_${periodId}` }],
+                    [{ text: '❌ Cancelar', callback_data: `summary_${periodId}` }]
+                ]);
+                return;
+            }
+
+            await sendTelegramMessage(chatId, '⏳ Descargando y guardando comprobante de pago de seguridad social...');
+            try {
+                const fileInfo = await downloadTelegramMedia(media.fileId, 'comprobante_ss', media.originalName, media.mimeType);
+                const period = await BillingPeriod.findById(periodId);
+                if (!period) {
+                    sessions.set(chatId, { state: 'idle' });
+                    await sendTelegramMessage(chatId, '⚠️ No se encontró el periodo del acta.');
+                    return;
+                }
+
+                period.securitySocialReceiptPath = fileInfo.relativePath;
+                await period.save();
+
+                await sendTelegramMessage(chatId, `✅ ¡Comprobante de pago de seguridad social guardado y vinculado al Acta N° ${period.actNumber} con éxito!`);
+                sessions.set(chatId, { state: 'idle' });
+                await showPeriodSummary(chatId, period._id);
+                return;
+            } catch (err) {
+                console.error('Error al guardar comprobante de pago SS:', err);
+                await sendTelegramMessage(chatId, `❌ Error al procesar el archivo: ${err.message}`);
                 sessions.set(chatId, { state: 'idle' });
                 if (periodId) await showPeriodSummary(chatId, periodId);
                 return;
@@ -4121,6 +4344,28 @@ const handleIncomingMessage = async (message) => {
         }
 
         await promptPeriodPlanilla(chatId, billingPeriod._id);
+        return;
+    }
+
+    // 4.1 Comprobante trigger: "comprobante", "recibo de pago", "subir comprobante", etc.
+    if (isComprobante(text)) {
+        const user = await resolveActiveUser(chatId);
+        if (!user) {
+            sessions.set(chatId, { state: 'awaiting_identification' });
+            await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
+            return;
+        }
+
+        const contract = await resolveActiveContract(chatId, user);
+        const query = { user: user._id };
+        if (contract) query.contract = contract._id;
+        const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
+        if (!billingPeriod) {
+            await promptDocComprobante(chatId, user);
+            return;
+        }
+
+        await promptPeriodComprobante(chatId, billingPeriod._id);
         return;
     }
 
@@ -4524,6 +4769,21 @@ const handleIncomingMessage = async (message) => {
 
         await promptPeriodPlanilla(chatId, billingPeriod._id);
         return;
+    } else if (text === '/comprobante' || text.toLowerCase() === 'comprobante' || text.toLowerCase() === 'subir comprobante') {
+        const user = await resolveActiveUser(chatId);
+        if (user) {
+            const contract = await resolveActiveContract(chatId, user);
+            const query = { user: user._id };
+            if (contract) query.contract = contract._id;
+            const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
+            if (billingPeriod) {
+                await promptPeriodComprobante(chatId, billingPeriod._id);
+                return;
+            } else {
+                await promptDocComprobante(chatId, user);
+                return;
+            }
+        }
     } else if (text === '/documentos' || text.toLowerCase() === 'documentos' || text.toLowerCase() === 'cargar documentos' || text.toLowerCase() === 'subir documentos') {
         const user = await resolveActiveUser(chatId);
         if (!user) {
@@ -4544,6 +4804,29 @@ const handleIncomingMessage = async (message) => {
             const media = extractTelegramFile(message);
             const caption = (message.caption || '').toLowerCase();
             const fileName = (message.document?.file_name || '').toLowerCase();
+
+            const isComprobanteSSFile = (caption.includes('comprobante') || caption.includes('recibo') || caption.includes('soporte') ||
+                                         fileName.includes('comprobante') || fileName.includes('recibo') || fileName.includes('soporte')) &&
+                                        (caption.includes('planilla') || caption.includes('seguridad') || caption.includes('pila') || caption.includes('aporte') ||
+                                         fileName.includes('planilla') || fileName.includes('seguridad') || fileName.includes('pila') || fileName.includes('aporte'));
+
+            if (media && isComprobanteSSFile) {
+                const contract = await resolveActiveContract(chatId, user);
+                const query = { user: user._id };
+                if (contract) query.contract = contract._id;
+                const billingPeriod = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
+                if (billingPeriod) {
+                    sessions.set(chatId, {
+                        state: 'awaiting_period_comprobante_ss',
+                        periodId: billingPeriod._id,
+                        actNumber: billingPeriod.actNumber,
+                        userId: user._id
+                    });
+                    await handleIncomingMessage(message);
+                    return;
+                }
+            }
+
             const isPlanillaFile = caption.includes('planilla') || caption.includes('seguridad social') || caption.includes('pila') ||
                                    fileName.includes('planilla') || fileName.includes('seguridad') || fileName.includes('pila') || fileName.includes('aporte');
 

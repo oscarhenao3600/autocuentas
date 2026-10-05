@@ -75,6 +75,9 @@ exports.createBillingZip = async (billingPeriod, contract, user) => {
 
             const ssPath = billingPeriod.securitySocialPath || contract.securitySocialPath;
             if (ssPath) await addFileToZip(ssPath, getZipDest('10-PLANILLA DE SEGURIDAD SOCIAL', ssPath));
+
+            const ssReceiptPath = billingPeriod.securitySocialReceiptPath;
+            if (ssReceiptPath) await addFileToZip(ssReceiptPath, getZipDest('11-COMPROBANTE DE PAGO SEGURIDAD SOCIAL', ssReceiptPath));
         }
 
         // 3. Copiar evidencias y Anexo Descripción por actividad en subcarpetas estructuradas (ej: 2.2.1, 2.2.2)

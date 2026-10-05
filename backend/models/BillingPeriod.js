@@ -162,6 +162,10 @@ const billingPeriodSchema = new mongoose.Schema({
         type: String,
         default: ""
     },
+    securitySocialReceiptPath: {
+        type: String,
+        default: ""
+    },
     createdAt: {
         type: Date,
         default: Date.now

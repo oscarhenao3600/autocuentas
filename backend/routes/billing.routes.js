@@ -9,17 +9,19 @@ const {
     downloadAnnexDocument,
     getTelegramCode,
     uploadPlanillaSocial,
+    uploadComprobanteSocial,
     unlockPlanillaSocial,
     improveEvidenceText
 } = require('../controllers/billing.controller');
 const { protect }  = require('../middleware/auth.middleware');
 const upload       = require('../middleware/upload.middleware');
 
-// Multer config: accept up to 10 evidence files per activity (up to 10 activities = 100 files max) + optional planilla file
-// Field names: evidence_0, evidence_1 ... evidence_9, securitySocialFile
+// Multer config: accept up to 10 evidence files per activity (up to 10 activities = 100 files max) + optional planilla file + optional comprobante
+// Field names: evidence_0, evidence_1 ... evidence_9, securitySocialFile, securitySocialReceiptFile
 const evidenceFields = [
     ...Array.from({ length: 10 }, (_, i) => ({ name: `evidence_${i}`, maxCount: 10 })),
-    { name: 'securitySocialFile', maxCount: 1 }
+    { name: 'securitySocialFile', maxCount: 1 },
+    { name: 'securitySocialReceiptFile', maxCount: 1 }
 ];
 
 // List all billing periods for logged user
@@ -27,6 +29,9 @@ router.get('/',              protect, listMyBillingPeriods);
 
 // Upload and process Security Social Planilla PDF with Gemini
 router.post('/upload-planilla', protect, upload.single('planillaFile'), uploadPlanillaSocial);
+
+// Upload Security Social Payment Receipt (PDF or Image)
+router.post('/upload-comprobante-ss', protect, upload.single('receiptFile'), uploadComprobanteSocial);
 
 // Unlock previously uploaded Planilla Social PDF with password
 router.post('/unlock-planilla', protect, unlockPlanillaSocial);

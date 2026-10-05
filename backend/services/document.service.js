@@ -35,8 +35,10 @@ function getModerateImageSize(buffer) {
         }
     } catch (_) {}
 
-    const maxWidth = 340;
-    const maxHeight = 220;
+    // Allow slightly wider bounds for landscape/screenshots so folder names remain legible
+    const isWideLandscape = (width / height) >= 1.4;
+    const maxWidth = isWideLandscape ? 420 : 340;
+    const maxHeight = isWideLandscape ? 240 : 220;
     const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
     return [Math.max(80, Math.round(width * ratio)), Math.max(60, Math.round(height * ratio))];
 }

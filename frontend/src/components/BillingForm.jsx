@@ -89,6 +89,11 @@ export default function BillingForm({ contract, onComplete }) {
     const [unlockingDoc, setUnlockingDoc] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
 
+    const isSecretariaTic = /tic|tecnolog/i.test(contract?.supervisorDependency || '') ||
+                            /tic|tecnolog/i.test(contract?.unidadEjecutora || '') ||
+                            Boolean(contract?.isTicContract);
+    const [sendToNextcloud, setSendToNextcloud] = useState(true);
+
     const activeActInfo = React.useMemo(() => {
         if (!contract) return { targetAct: 1, reason: '', periods: [] };
         return determineActiveAct(contract);
@@ -153,6 +158,9 @@ export default function BillingForm({ contract, onComplete }) {
                     if (found.securitySocialPath) {
                         setPlanillaPath(found.securitySocialPath);
                     }
+                    if (found.securitySocialReceiptPath) {
+                        setComprobantePath(found.securitySocialReceiptPath);
+                    }
                     if (found.activities && found.activities.length > 0) {
                         setActivities(found.activities.map(a => ({
                             obligationCode: a.obligationCode,
@@ -186,6 +194,42 @@ export default function BillingForm({ contract, onComplete }) {
     const [uploadingPlanilla, setUploadingPlanilla] = useState(false);
     const [planillaPath, setPlanillaPath] = useState(contract?.securitySocialPath || '');
     const [planillaFile, setPlanillaFile] = useState(null);
+
+    const [comprobantePath, setComprobantePath] = useState('');
+    const [comprobanteFile, setComprobanteFile] = useState(null);
+    const [uploadingComprobante, setUploadingComprobante] = useState(false);
+    const [comprobanteSuccess, setComprobanteSuccess] = useState('');
+    const [comprobanteError, setComprobanteError] = useState('');
+
+    const handleComprobanteUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setComprobanteFile(file);
+
+        const formData = new FormData();
+        formData.append('receiptFile', file);
+        if (contract?._id) {
+            formData.append('contractId', contract._id);
+        }
+
+        setUploadingComprobante(true);
+        setComprobanteError('');
+        setComprobanteSuccess('');
+        try {
+            const { data } = await api.post('/billing/upload-comprobante-ss', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            if (data.filePath) {
+                setComprobantePath(data.filePath);
+            }
+            setComprobanteSuccess(data.message || 'Comprobante de pago cargado con éxito.');
+            setTimeout(() => setComprobanteSuccess(''), 6000);
+        } catch (err) {
+            setComprobanteError('Error al cargar comprobante: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setUploadingComprobante(false);
+        }
+    };
 
     const handlePlanillaUpload = async (e) => {
         const file = e.target.files[0];
@@ -346,6 +390,12 @@ export default function BillingForm({ contract, onComplete }) {
             if (planillaFile) {
                 fd.append('securitySocialFile', planillaFile);
             }
+            if (comprobantePath) {
+                fd.append('securitySocialReceiptPath', comprobantePath);
+            }
+            if (comprobanteFile) {
+                fd.append('securitySocialReceiptFile', comprobanteFile);
+            }
 
             // Attach evidence files per activity index
             activities.forEach((act, idx) => {
@@ -372,7 +422,9 @@ export default function BillingForm({ contract, onComplete }) {
             if (!id) id = await saveDraft();
             if (!id) return;
 
-            const { data } = await api.post(`/billing/${id}/generate`);
+            const { data } = await api.post(`/billing/${id}/generate`, {
+                sendToNextcloud: isSecretariaTic && sendToNextcloud
+            });
             setResult(data);
             next(); // go to success step
         } catch (err) {
@@ -760,6 +812,48 @@ export default function BillingForm({ contract, onComplete }) {
                                 {error && <p style={{ fontSize: '0.8rem', color: 'var(--error)', margin: 0 }}>{error}</p>}
                             </div>
 
+                            {/* Zona de Carga de Comprobante de Pago de Planilla */}
+                            <div style={{ 
+                                padding: '1.25rem', 
+                                border: '1px dashed #10b981', 
+                                borderRadius: 'var(--radius-md)', 
+                                background: 'rgba(16, 185, 129, 0.04)',
+                                marginBottom: '1.5rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                textAlign: 'center'
+                            }}>
+                                <p style={{ fontSize: '0.875rem', fontWeight: 600, margin: 0, color: 'var(--text)' }}>
+                                    🧾 Comprobante de Pago de la Planilla (Soporte Bancario o PSE)
+                                </p>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, maxWidth: '480px' }}>
+                                    Adjunta el soporte o recibo de pago de tu planilla de seguridad social para incluirlo en tus documentos oficiales y en la NAS.
+                                </p>
+                                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center' }}>
+                                    <label className="btn" style={{ 
+                                        fontSize: '0.8rem', 
+                                        background: '#10b981', 
+                                        color: 'white', 
+                                        cursor: 'pointer',
+                                        padding: '0.5rem 1rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        opacity: uploadingComprobante ? 0.7 : 1
+                                    }}>
+                                        {uploadingComprobante ? '⏳ Subiendo Comprobante...' : (comprobantePath ? 'Cambiar Comprobante' : 'Subir Comprobante de Pago (PDF / Imagen)')}
+                                        <input type="file" style={{ display: 'none' }} onChange={handleComprobanteUpload} accept=".pdf,image/*" disabled={uploadingComprobante} />
+                                    </label>
+                                    {comprobantePath && (
+                                        <span style={{ fontSize: '0.8rem', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                                            <CheckCircle2 size={16} /> Comprobante adjuntado
+                                        </span>
+                                    )}
+                                </div>
+                                {comprobanteSuccess && <p style={{ fontSize: '0.8rem', color: 'var(--success)', margin: 0 }}>{comprobanteSuccess}</p>}
+                                {comprobanteError && <p style={{ fontSize: '0.8rem', color: 'var(--error)', margin: 0 }}>{comprobanteError}</p>}
+                            </div>
+
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
                                 <div className="form-group">
                                     <label className="label">Operador <span style={{ color: 'var(--error)' }}>*</span></label>
@@ -833,6 +927,10 @@ export default function BillingForm({ contract, onComplete }) {
                                     <span>{activities.reduce((s, a) => s + a.files.length, 0)} archivos</span>
                                     <span style={{ color: 'var(--text-muted)' }}>Planilla SS:</span>
                                     <span>{ss.planillaNumber || '—'}</span>
+                                    <span style={{ color: 'var(--text-muted)' }}>Comprobante SS:</span>
+                                    <span style={{ color: (comprobantePath || comprobanteFile) ? '#10b981' : 'var(--text-muted)' }}>
+                                        {(comprobantePath || comprobanteFile) ? '✓ Adjuntado' : 'No adjuntado'}
+                                    </span>
                                     <span style={{ color: 'var(--text-muted)' }}>Total SS pagado:</span>
                                     <span>$ {Number(ss.totalPaid || 0).toLocaleString('es-CO')}</span>
                                 </div>
@@ -840,11 +938,41 @@ export default function BillingForm({ contract, onComplete }) {
 
                             <div style={{
                                 padding: '0.875rem 1rem', background: 'rgba(var(--primary-rgb,79,70,229),0.07)',
-                                borderRadius: 'var(--radius-md)', marginBottom: '1.5rem',
+                                borderRadius: 'var(--radius-md)', marginBottom: '1.25rem',
                                 fontSize: '0.825rem', color: 'var(--text-muted)'
                             }}>
                                 <strong>Se generarán:</strong> Certificado del Supervisor · Informe de Actividades · Descuento de Estampillas · Retención en la Fuente + Anexos Descripción por obligación y evidencias organizadas en un ZIP listo para entregar.
                             </div>
+
+                            {/* Confirmación específica para Secretaría TIC */}
+                            {isSecretariaTic && (
+                                <div style={{
+                                    padding: '1rem',
+                                    borderRadius: 'var(--radius-md)',
+                                    border: '1px solid #10b981',
+                                    background: 'rgba(16, 185, 129, 0.08)',
+                                    marginBottom: '1.5rem'
+                                }}>
+                                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={sendToNextcloud}
+                                            onChange={(e) => setSendToNextcloud(e.target.checked)}
+                                            style={{ width: '1.25rem', height: '1.25rem', marginTop: '0.2rem', cursor: 'pointer', accentColor: '#10b981' }}
+                                        />
+                                        <div>
+                                            <strong style={{ display: 'block', color: 'var(--text)', marginBottom: '0.25rem' }}>
+                                                🏛️ Enviar a la NAS de Secretaría TIC y generar capturas oficiales
+                                            </strong>
+                                            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: '1.4', display: 'block' }}>
+                                                Sube automáticamente tus evidencias a tu carpeta de Nextcloud (CUENTA {periodData.actNumber}) y captura los pantallazos oficiales para incrustarlos en el Informe de Actividades.
+                                                <br />
+                                                <em>Si desmarcas esta casilla, se generará la cuenta tradicional con fotos individuales y comentarios habituales.</em>
+                                            </span>
+                                        </div>
+                                    </label>
+                                </div>
+                            )}
 
                             <div style={{ display: 'flex', gap: '1rem' }}>
                                 <button className="btn" style={{ flex: 1, border: '1px solid var(--border)' }} onClick={prev}>
@@ -856,7 +984,10 @@ export default function BillingForm({ contract, onComplete }) {
                                     onClick={handleGenerate}
                                     disabled={generating || saving}
                                 >
-                                    {generating ? '⏳ Generando...' : <><Package size={18} /> Generar Paquete</>}
+                                    {generating
+                                        ? (isSecretariaTic && sendToNextcloud ? '⏳ Subiendo a NAS y tomando capturas...' : '⏳ Generando...')
+                                        : <><Package size={18} /> Generar Paquete</>
+                                    }
                                 </button>
                             </div>
                         </motion.div>
@@ -868,6 +999,20 @@ export default function BillingForm({ contract, onComplete }) {
                             <div style={{ textAlign: 'center', padding: '1rem 0 2rem' }}>
                                 <CheckCircle2 size={64} color="var(--success)" style={{ marginBottom: '1rem' }} />
                                 <h2 style={{ marginBottom: '0.5rem' }}>¡Paquete Generado!</h2>
+                                {result.nextcloudUploaded && (
+                                    <div style={{
+                                        display: 'inline-block',
+                                        padding: '0.4rem 0.8rem',
+                                        background: 'rgba(16, 185, 129, 0.12)',
+                                        color: '#10b981',
+                                        borderRadius: 'var(--radius-sm)',
+                                        fontSize: '0.85rem',
+                                        fontWeight: 600,
+                                        marginBottom: '1rem'
+                                    }}>
+                                        ☁️ Soportes y documentos enviados a la NAS de Secretaría TIC
+                                    </div>
+                                )}
                                 <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>
                                     Tus 4 formatos y evidencias están listos en un solo archivo ZIP.
                                 </p>

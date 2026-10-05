@@ -8,6 +8,7 @@ const { createBillingZip } = require('../services/archive.service');
 const { extractSecuritySocialData, improveEvidenceText, generateObligationAnnexDescription, generateExecutionEvidencesSummary } = require('../services/gemini.service');
 const annexService = require('../services/annex.service');
 const storageService = require('../services/storage.service');
+const nextcloudService = require('../services/nextcloud.service');
 const { calculateSocialSecurity, formatRubroPresupuestal } = require('../utils/period.utils');
 const { getFormatNameForDependency } = require('../utils/secretariasDictionary');
 
@@ -245,6 +246,22 @@ exports.saveBillingPeriod = async (req, res) => {
             }
         }
 
+        // Handle security social receipt file (comprobante de pago de planilla)
+        let ssReceiptPath = req.body.securitySocialReceiptPath || '';
+        if (req.files && req.files['securitySocialReceiptFile'] && req.files['securitySocialReceiptFile'][0]) {
+            const ssRFile = req.files['securitySocialReceiptFile'][0];
+            const ssRBuffer = ssRFile.buffer || (ssRFile.path && fs.existsSync(ssRFile.path) ? fs.readFileSync(ssRFile.path) : null);
+            if (ssRBuffer) {
+                const uploadedSSR = await storageService.saveFile({
+                    buffer: ssRBuffer,
+                    filename: ssRFile.originalname,
+                    mimetype: ssRFile.mimetype,
+                    pathSegments: ['Contratistas', contractorFolder, `Acta_${targetAct}`, 'Comprobante_Pago_SS']
+                });
+                ssReceiptPath = uploadedSSR.path;
+            }
+        }
+
         // Upsert: one draft per actNumber per contract per user (status pending)
         const query = {
             user: req.user._id,
@@ -262,6 +279,7 @@ exports.saveBillingPeriod = async (req, res) => {
             period.securitySocial = parsedSS    || period.securitySocial;
             if (contractId && !period.contract) period.contract = contractId;
             if (ssPath) period.securitySocialPath = ssPath;
+            if (ssReceiptPath) period.securitySocialReceiptPath = ssReceiptPath;
             await period.save();
         } else {
             period = await BillingPeriod.create({
@@ -272,7 +290,8 @@ exports.saveBillingPeriod = async (req, res) => {
                 periodTo,
                 activities:     parsedActivities || [],
                 securitySocial: parsedSS || {},
-                securitySocialPath: ssPath
+                securitySocialPath: ssPath,
+                securitySocialReceiptPath: ssReceiptPath
             });
         }
 
@@ -292,7 +311,8 @@ exports.saveBillingPeriod = async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // Helper / Function: Generate all 4 Word docs + ZIP for a BillingPeriod
 // ──────────────────────────────────────────────────────────────
-const generateBillingPackage = async (periodId, userId) => {
+const generateBillingPackage = async (periodId, userId, options = {}) => {
+    const { sendToNextcloud = false } = options;
     const period = await BillingPeriod.findOne({ _id: periodId, user: userId });
     if (!period) throw new Error('Periodo no encontrado');
 
@@ -683,6 +703,181 @@ const generateBillingPackage = async (periodId, userId) => {
             }))
         };
 
+        const isTicContract = /tic|tecnolog/i.test(contract.supervisorDependency || '') ||
+                              /tic|tecnolog/i.test(contract.unidadEjecutora || '') ||
+                              Boolean(contract.isTicContract);
+        const shouldSendToNextcloud = Boolean(sendToNextcloud && isTicContract);
+
+        const outputDir = path.resolve(__dirname, '..', 'generated');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        // Helper para asegurar que los "Anexo Descripcion #[codigo]" estén creados
+        let annexesGenerated = false;
+        async function ensureAnnexesGenerated() {
+            if (annexesGenerated) return;
+            annexesGenerated = true;
+
+            for (let i = 0; i < (period.activities || []).length; i++) {
+                const act = period.activities[i];
+                const code = act.obligationCode || `2.2.${i + 1}`;
+                const text = act.obligationText || '';
+                const allEvidences = act.evidences || [];
+
+                const photos = allEvidences.filter(isImageEvidence);
+                const docs = allEvidences.filter(ev => !isImageEvidence(ev));
+                const annexImages = [];
+
+                if (photos.length > 0) {
+                    for (const photoEv of photos) {
+                        try {
+                            const imgData = await annexService.renderEvidenceToImage(photoEv);
+                            if (imgData) annexImages.push(imgData);
+                        } catch (pErr) {
+                            console.warn(`⚠️ Error al procesar imagen para Anexo Obligación ${code}:`, pErr.message);
+                        }
+                    }
+                }
+
+                if (photos.length === 0 && docs.length > 0) {
+                    for (const docEv of docs) {
+                        try {
+                            const imgData = await annexService.renderEvidenceToImage(docEv);
+                            if (imgData) annexImages.push(imgData);
+                        } catch (dErr) {
+                            console.warn(`⚠️ Error al generar captura de primera página para soporte en Obligación ${code}:`, dErr.message);
+                        }
+                    }
+                }
+
+                if (annexImages.length > 0 || (act.comment && act.comment.trim().length > 0)) {
+                    try {
+                        const extendedDesc = await generateObligationAnnexDescription({
+                            obligationCode: code,
+                            obligationText: text,
+                            contractorComment: act.comment,
+                            evidences: allEvidences,
+                            imageCount: Math.max(1, annexImages.length)
+                        });
+
+                        const annexBuf = await annexService.generateAnnexDocument({
+                            obligationCode: code,
+                            obligationText: text,
+                            images: annexImages,
+                            description: extendedDesc
+                        });
+
+                        const safeCode = (code || 'General').trim().replace(/[^a-zA-Z0-9.-]/g, '_');
+                        const annexFileName = `${Date.now()}-Anexo_Descripcion_${safeCode}.docx`;
+                        const annexFilePath = path.join(outputDir, annexFileName);
+                        fs.writeFileSync(annexFilePath, annexBuf);
+
+                        act.annexDescription = extendedDesc;
+                        act.annexDocPath = annexFilePath;
+
+                        try {
+                            const safeName = (user.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_');
+                            const contractorFolder = `${contract?.idNumber || user?.cedula || user?._id}_${safeName}`;
+                            const driveUpload = await storageService.saveFile({
+                                buffer: annexBuf,
+                                filename: `Anexo Descripcion ${code}.docx`,
+                                mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                                pathSegments: ['Contratistas', contractorFolder, `Acta_${period.actNumber}`, 'Anexos_Descripcion']
+                            });
+                            act.annexDriveId = driveUpload.driveId;
+                        } catch (driveErr) {
+                            console.warn(`⚠️ No se pudo respaldar Anexo Descripción ${code} en Drive:`, driveErr.message);
+                        }
+                    } catch (annexErr) {
+                        console.warn(`⚠️ Error al generar Anexo Descripción para Obligación ${code}:`, annexErr.message);
+                    }
+                }
+            }
+        }
+
+        let nextcloudScreenshotsByCode = new Map();
+        let nextcloudBasePath = contract.nextcloudBasePath || process.env.NEXTCLOUD_BASE_PATH || '/INFRAESTRUCTURA TIC/MESA DE AYUDA';
+        let nextcloudContractorName = contract.contractorName || user.fullName || 'Contratista';
+        let nextcloudContractNumber = contract.contractNumber || 'Contrato';
+        let nextcloudAccountPath = null;
+
+        if (shouldSendToNextcloud) {
+            console.log('🚀 Flujo Secretaría TIC activado: Generando anexos y subiendo a Nextcloud NAS...');
+            await ensureAnnexesGenerated();
+
+            nextcloudAccountPath = nextcloudService.buildAccountPath({
+                basePath: nextcloudBasePath,
+                contractorName: nextcloudContractorName,
+                contractNumber: nextcloudContractNumber,
+                accountNumber: period.actNumber
+            });
+
+            const foldersToCapture = [];
+            const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+            if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+            for (let i = 0; i < (period.activities || []).length; i++) {
+                const act = period.activities[i];
+                const rawCode = (act.obligationCode || `2.2.${i + 1}`).trim();
+                const cleanCode = rawCode.replace(/\.+$/, '');
+                const targetFolder = `${nextcloudAccountPath}/EVIDENCIAS/${cleanCode}`;
+
+                try {
+                    await nextcloudService.ensureDirectory(targetFolder);
+
+                    // 1. Subir Anexo Descripción si existe
+                    if (act.annexDocPath && fs.existsSync(act.annexDocPath)) {
+                        await nextcloudService.uploadLocalFile(
+                            `${targetFolder}/Anexo Descripcion ${cleanCode}.docx`,
+                            act.annexDocPath
+                        );
+                    }
+
+                    // 2. Subir evidencias (fotos y documentos)
+                    for (let evIdx = 0; evIdx < (act.evidences || []).length; evIdx++) {
+                        const ev = act.evidences[evIdx];
+                        const evPath = ev.path || ev.driveId;
+                        if (evPath) {
+                            const evBuf = await storageService.getFileBuffer(evPath);
+                            if (evBuf) {
+                                const ext = path.extname(ev.filename || evPath) || '.jpg';
+                                const isImg = isImageEvidence(ev);
+                                const destName = isImg ? `Foto_${evIdx + 1}${ext}` : `Soporte_${cleanCode}_${evIdx + 1}${ext}`;
+                                await nextcloudService.uploadBuffer(`${targetFolder}/${destName}`, evBuf);
+                            }
+                        }
+                    }
+
+                    // 3. Programar captura de pantalla de esta obligación
+                    const outScreenshotPath = path.join(uploadsDir, `pantallazo_nextcloud_${cleanCode}_${Date.now()}.png`);
+                    foldersToCapture.push({
+                        cleanCode,
+                        folderPath: targetFolder,
+                        outputPath: outScreenshotPath
+                    });
+                } catch (ticFolderErr) {
+                    console.warn(`⚠️ Error al preparar carpeta ${targetFolder} en Nextcloud:`, ticFolderErr.message);
+                }
+            }
+
+            if (foldersToCapture.length > 0) {
+                console.log(`📸 Tomando ${foldersToCapture.length} pantallazos en Nextcloud para Secretaría TIC...`);
+                try {
+                    const captureResults = await nextcloudService.captureMultipleFoldersScreenshots(foldersToCapture, {
+                        viewport: { width: 1600, height: 900 }
+                    });
+                    for (const item of captureResults) {
+                        if (item.success && fs.existsSync(item.outputPath)) {
+                            nextcloudScreenshotsByCode.set(item.cleanCode, fs.readFileSync(item.outputPath));
+                        }
+                    }
+                } catch (captureErr) {
+                    console.error('❌ Error durante la captura de pantallazos en Nextcloud:', captureErr.message);
+                }
+            }
+        }
+
         const fotos_evidencias = [];
         const lista_actividades = [];
 
@@ -715,43 +910,58 @@ const generateBillingPackage = async (periodId, userId) => {
             const imageEvidences = (act.evidences || []).filter(isImageEvidence);
             const docEvidences = (act.evidences || []).filter(ev => !isImageEvidence(ev));
 
-            const totalPhotos = imageEvidences.length;
-            let photoIndex = 0;
+            // Si es Secretaría TIC y tenemos la captura de la NAS, usarla en lugar de las fotos individuales
+            if (shouldSendToNextcloud && nextcloudScreenshotsByCode.has(cleanCode)) {
+                const nasScreenshot = nextcloudScreenshotsByCode.get(cleanCode);
+                fotos.push({
+                    descripcion: 'Registro de evidencias en NAS Nextcloud (Secretaría TIC)',
+                    foto: nasScreenshot
+                });
+                fotos_evidencias.push({
+                    codigo: cleanCode,
+                    descripcion: 'Registro de evidencias en NAS Nextcloud (Secretaría TIC)',
+                    foto: nasScreenshot
+                });
+            } else {
+                // Flujo tradicional (o dependencias no-TIC): incluir fotos individuales
+                const totalPhotos = imageEvidences.length;
+                let photoIndex = 0;
 
-            for (const ev of imageEvidences) {
-                if (ev.path || ev.driveId) {
-                    photoIndex++;
-                    const photoBuffer = await storageService.getFileBuffer(ev.path || ev.driveId);
-                    if (photoBuffer) {
-                        const rawDesc = (ev.description || '').trim();
-                        const isDuplicateComment = rawDesc.toLowerCase() === comment.toLowerCase();
-                        const hasCustomCaption = rawDesc.length > 0 && !isDuplicateComment;
+                for (const ev of imageEvidences) {
+                    if (ev.path || ev.driveId) {
+                        photoIndex++;
+                        const photoBuffer = await storageService.getFileBuffer(ev.path || ev.driveId);
+                        if (photoBuffer) {
+                            const rawDesc = (ev.description || '').trim();
+                            const isDuplicateComment = rawDesc.toLowerCase() === comment.toLowerCase();
+                            const hasCustomCaption = rawDesc.length > 0 && !isDuplicateComment;
 
-                        let captionText;
-                        if (totalPhotos > 1) {
-                            if (hasCustomCaption) {
-                                captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: ${rawDesc}`;
+                            let captionText;
+                            if (totalPhotos > 1) {
+                                if (hasCustomCaption) {
+                                    captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: ${rawDesc}`;
+                                } else {
+                                    captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: Soporte de ejecución de la obligación ${cleanCode}`;
+                                }
                             } else {
-                                captionText = `Registro fotográfico ${photoIndex} de ${totalPhotos}: Soporte de ejecución de la obligación ${cleanCode}`;
+                                if (hasCustomCaption) {
+                                    captionText = `Registro fotográfico: ${rawDesc}`;
+                                } else {
+                                    captionText = `Registro fotográfico: Soporte de ejecución de la actividad`;
+                                }
                             }
-                        } else {
-                            if (hasCustomCaption) {
-                                captionText = `Registro fotográfico: ${rawDesc}`;
-                            } else {
-                                captionText = `Registro fotográfico: Soporte de ejecución de la actividad`;
-                            }
+
+                            fotos.push({
+                                descripcion: captionText,
+                                foto: photoBuffer
+                            });
+
+                            fotos_evidencias.push({
+                                codigo: totalPhotos > 1 ? `${cleanCode} (${photoIndex}/${totalPhotos})` : cleanCode,
+                                descripcion: captionText,
+                                foto: photoBuffer
+                            });
                         }
-
-                        fotos.push({
-                            descripcion: captionText,
-                            foto: photoBuffer
-                        });
-
-                        fotos_evidencias.push({
-                            codigo: totalPhotos > 1 ? `${cleanCode} (${photoIndex}/${totalPhotos})` : cleanCode,
-                            descripcion: captionText,
-                            foto: photoBuffer
-                        });
                     }
                 }
             }
@@ -835,95 +1045,57 @@ const generateBillingPackage = async (periodId, userId) => {
         // Attach generated paths to period so archive.service can find them
         Object.assign(period, generatedPaths);
 
-        // ── Generar Formatos "Anexo Descripcion #[codigo]" para cada obligación ──
-        const outputDir = path.resolve(__dirname, '..', 'generated');
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
+        // Asegurar que Anexos Descripción queden generados si no se ejecutó el flujo previo
+        await ensureAnnexesGenerated();
 
-        for (let i = 0; i < (period.activities || []).length; i++) {
-            const act = period.activities[i];
-            const code = act.obligationCode || `2.2.${i + 1}`;
-            const text = act.obligationText || '';
-            const allEvidences = act.evidences || [];
+        // Si fue el flujo de Secretaría TIC, subir todos los formatos oficiales, minuta, banco, planilla y comprobante a la carpeta DOCUMENTOS en Nextcloud
+        if (shouldSendToNextcloud && nextcloudAccountPath) {
+            try {
+                console.log('📤 Subiendo documentos oficiales y anexos a la carpeta DOCUMENTOS en Nextcloud...');
+                const docsToUpload = [
+                    { localPath: generatedPaths.certificadoPath, destFileName: '1-CERTIFICADO DEL SUPERVISOR.docx' },
+                    { localPath: generatedPaths.informePath, destFileName: '2-INFORME DE ACTIVIDADES.docx' },
+                    { localPath: generatedPaths.estampillasPath, destFileName: '3-DESCUENTO DE ESTAMPILLAS.docx' },
+                    { localPath: generatedPaths.retencionPath, destFileName: '4-RETENCION EN LA FUENTE.docx' }
+                ];
 
-            const photos = allEvidences.filter(isImageEvidence);
-            const docs = allEvidences.filter(ev => !isImageEvidence(ev));
+                const extraContractDocs = [
+                    { path: contract.actaInicioPath, defaultName: '5-ACTA DE INICIO' },
+                    { path: contract.rpPath, defaultName: '6-REGISTRO PRESUPUESTAL' },
+                    { path: contract.baseDocumentPath, defaultName: '7-MINUTA DEL CONTRATO' },
+                    { path: contract.rutPath, defaultName: '8-RUT' },
+                    { path: contract.bankCertificatePath, defaultName: '9-CERTIFICADO DE CUENTA BANCARIA' },
+                    { path: period.securitySocialPath || contract.securitySocialPath, defaultName: '10-PLANILLA DE SEGURIDAD SOCIAL' },
+                    { path: period.securitySocialReceiptPath, defaultName: '11-COMPROBANTE DE PAGO SEGURIDAD SOCIAL' }
+                ];
 
-            const annexImages = [];
-
-            // 1. Si hay fotos directas, cargarlas y escalarlas
-            if (photos.length > 0) {
-                for (const photoEv of photos) {
-                    try {
-                        const imgData = await annexService.renderEvidenceToImage(photoEv);
-                        if (imgData) annexImages.push(imgData);
-                    } catch (pErr) {
-                        console.warn(`⚠️ Error al procesar imagen para Anexo Obligación ${code}:`, pErr.message);
+                for (const extra of extraContractDocs) {
+                    if (extra.path) {
+                        try {
+                            const buf = await storageService.getFileBuffer(extra.path);
+                            if (buf) {
+                                const ext = path.extname(extra.path) || '.pdf';
+                                docsToUpload.push({
+                                    buffer: buf,
+                                    destFileName: `${extra.defaultName}${ext}`
+                                });
+                            }
+                        } catch (e) {
+                            console.warn(`Aviso al obtener buffer de ${extra.defaultName}:`, e.message);
+                        }
                     }
                 }
-            }
 
-            // 2. Si la obligación SOLO cuenta con evidencias de documentos o Excel (o si no tiene fotos directas)
-            // Se extrae la captura/pantallazo de la primera página
-            if (photos.length === 0 && docs.length > 0) {
-                for (const docEv of docs) {
-                    try {
-                        const imgData = await annexService.renderEvidenceToImage(docEv);
-                        if (imgData) annexImages.push(imgData);
-                    } catch (dErr) {
-                        console.warn(`⚠️ Error al generar captura de primera página para soporte en Obligación ${code}:`, dErr.message);
-                    }
-                }
-            }
-
-            // Generar documento oficial de la obligación si tiene evidencias o descripción de labores
-            if (annexImages.length > 0 || (act.comment && act.comment.trim().length > 0)) {
-                try {
-                    // Generar descripción técnica de 100-150 palabras (o más si hay múltiples páginas)
-                    const extendedDesc = await generateObligationAnnexDescription({
-                        obligationCode: code,
-                        obligationText: text,
-                        contractorComment: act.comment,
-                        evidences: allEvidences,
-                        imageCount: Math.max(1, annexImages.length)
-                    });
-
-                    // Construir el documento Word oficial siguiendo el formato Anexo 2.2
-                    const annexBuf = await annexService.generateAnnexDocument({
-                        obligationCode: code,
-                        obligationText: text,
-                        images: annexImages,
-                        description: extendedDesc
-                    });
-
-                    const safeCode = (code || 'General').trim().replace(/[^a-zA-Z0-9.-]/g, '_');
-                    const annexFileName = `${Date.now()}-Anexo_Descripcion_${safeCode}.docx`;
-                    const annexFilePath = path.join(outputDir, annexFileName);
-                    fs.writeFileSync(annexFilePath, annexBuf);
-
-                    act.annexDescription = extendedDesc;
-                    act.annexDocPath = annexFilePath;
-
-                    // Opcional: Respaldar Anexo en Google Drive si está habilitado
-                    try {
-                        const safeName = (user.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_');
-                        const contractorFolder = `${contract?.idNumber || user?.cedula || user?._id}_${safeName}`;
-                        const driveUpload = await storageService.saveFile({
-                            buffer: annexBuf,
-                            filename: `Anexo Descripcion ${code}.docx`,
-                            mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                            pathSegments: ['Contratistas', contractorFolder, `Acta_${period.actNumber}`, 'Anexos_Descripcion']
-                        });
-                        act.annexDriveId = driveUpload.driveId;
-                    } catch (driveErr) {
-                        console.warn(`⚠️ No se pudo respaldar Anexo Descripción ${code} en Drive:`, driveErr.message);
-                    }
-
-                    console.log(`✅ Generado: Anexo Descripcion ${code}.docx con ${annexImages.length} imágenes y descripción técnica (${extendedDesc.split(/\s+/).length} palabras)`);
-                } catch (annexErr) {
-                    console.warn(`⚠️ Error al generar Anexo Descripción para Obligación ${code}:`, annexErr.message);
-                }
+                await nextcloudService.uploadFinalDocumentsToNextcloud({
+                    basePath: nextcloudBasePath,
+                    contractorName: nextcloudContractorName,
+                    contractNumber: nextcloudContractNumber,
+                    accountNumber: period.actNumber,
+                    documents: docsToUpload
+                });
+                console.log('✅ Documentos completos subidos a Nextcloud con éxito');
+            } catch (upErr) {
+                console.warn('⚠️ Error al subir documentos finales a Nextcloud:', upErr.message);
             }
         }
 
@@ -938,7 +1110,7 @@ const generateBillingPackage = async (periodId, userId) => {
         period.status  = 'pending'; // ready but not yet approved
         await period.save();
 
-        return { period, contract, user, zipPath, generatedPaths };
+        return { period, contract, user, zipPath, generatedPaths, nextcloudUploaded: shouldSendToNextcloud };
 };
 
 exports.generateBillingPackage = generateBillingPackage;
@@ -948,16 +1120,18 @@ exports.generateBillingPackage = generateBillingPackage;
 // ──────────────────────────────────────────────────────────────
 exports.generatePackage = async (req, res) => {
     try {
-        const { period, zipPath } = await generateBillingPackage(req.params.id, req.user._id);
+        const { sendToNextcloud } = req.body || {};
+        const { period, zipPath, nextcloudUploaded } = await generateBillingPackage(req.params.id, req.user._id, { sendToNextcloud });
 
         res.json({
-            message: 'Paquete generado con éxito',
+            message: nextcloudUploaded ? 'Paquete generado y subido a Nextcloud NAS con éxito' : 'Paquete generado con éxito',
             zipUrl: `/generated/${path.basename(zipPath)}`,
-            data: period
+            data: period,
+            nextcloudUploaded
         });
     } catch (err) {
         console.error('Error generatePackage:', err);
-        res.status(500).json({ message: 'Error al generar el paquete', error: err.message });
+        res.status(500).json({ message: 'Error al generar el paquete: ' + err.message, error: err.message });
     }
 };
 
@@ -1258,5 +1432,46 @@ exports.downloadAnnexDocument = async (req, res) => {
         res.status(500).json({ message: 'Error al descargar el anexo', error: err.message });
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/billing/upload-comprobante-ss  →  Upload payment receipt of planilla
+// ──────────────────────────────────────────────────────────────
+exports.uploadComprobanteSocial = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Por favor suba el comprobante de pago de la planilla' });
+        }
+
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = null;
+        if (contractId) {
+            contract = await Contract.findById(contractId);
+        }
+        if (!contract && req.user && req.user._id) {
+            contract = await Contract.findOne({ user: req.user._id }).sort({ createdAt: -1 });
+        }
+
+        const user = await User.findById(req.user._id);
+        const contractorFolder = `${contract?.idNumber || user?.cedula || req.user._id}_${(contract?.contractorName || user?.fullName || 'Contratista').replace(/[^a-zA-Z0-9]/g, '_')}`;
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', contractorFolder, 'Comprobantes_Pago_SS']
+        });
+
+        res.json({
+            message: 'Comprobante de pago de planilla subido con éxito',
+            filePath: uploaded.path,
+            filename: req.file.originalname
+        });
+    } catch (err) {
+        console.error('Error uploadComprobanteSocial:', err);
+        res.status(500).json({ message: 'Error al subir comprobante de pago', error: err.message });
+    }
+};
+
 
 
