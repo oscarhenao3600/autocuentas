@@ -8,6 +8,8 @@ backend/node_modules/
 backend/.env
 *credentials*.json
 token*.json
+*service-account*.json
+*JSON-Cuentas*.json
 
 # Build outputs
 dist/

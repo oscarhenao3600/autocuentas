@@ -769,7 +769,7 @@ const handleIncomingPaymentReceipt = async (chatId, message, user, media) => {
         await sendTelegramMessage(chatId, confMsg);
 
         // Forward to admin
-        const approvalChatId = config.approvalTelegramChatId;
+        const approvalChatId = config.approvalTelegramChatId || process.env.TELEGRAM_ADMIN_CHAT_ID;
         if (approvalChatId) {
             const adminCaption = `🔔 *NUEVO COMPROBANTE DE PAGO RECIBIDO*\n\n` +
                 `👤 *Funcionario:* ${contractorName}\n` +
@@ -4972,6 +4972,7 @@ module.exports = {
     startTelegramPolling,
     sendTelegramMessage,
     sendTelegramKeyboardMessage,
+    sendTelegramMediaWithKeyboard,
     sendTelegramDocument,
     handleIncomingMessage,
     handleCallbackQuery,

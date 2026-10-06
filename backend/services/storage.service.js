@@ -68,7 +68,10 @@ class StorageService {
             throw new Error('No se proporcionó buffer de archivo para guardar');
         }
 
-        const safeFilename = path.basename(filename || 'archivo.bin');
+        // Prepare local path as contingency / fallback
+        const uploadsDir = path.resolve(__dirname, '..', 'uploads', ...pathSegments);
+        const localFilePath = path.join(uploadsDir, safeFilename);
+        const relPath = path.relative(path.resolve(__dirname, '..'), localFilePath).replace(/\\/g, '/');
 
         try {
             const driveResult = await googleDriveService.uploadBuffer({
@@ -82,6 +85,7 @@ class StorageService {
 
             return {
                 path: proxyPath,
+                localPath: localFilePath,
                 driveId: driveResult.fileId,
                 filename: safeFilename,
                 mimetype: driveResult.mimeType || mimetype,
@@ -90,8 +94,23 @@ class StorageService {
                 webContentLink: driveResult.webContentLink
             };
         } catch (driveErr) {
-            console.error('❌ Error subiendo a Google Drive:', driveErr.message);
-            throw new Error(`Error al guardar archivo en Google Drive: ${driveErr.message}`);
+            console.warn(`⚠️ Error subiendo a Google Drive (${driveErr.message}). Activando almacenamiento local de contingencia en disco.`);
+
+            if (!fs.existsSync(uploadsDir)) {
+                fs.mkdirSync(uploadsDir, { recursive: true });
+            }
+            fs.writeFileSync(localFilePath, buffer);
+
+            return {
+                path: relPath,
+                localPath: localFilePath,
+                driveId: null,
+                filename: safeFilename,
+                mimetype: mimetype || 'application/octet-stream',
+                size: buffer.length,
+                isLocalFallback: true,
+                driveError: driveErr.message
+            };
         }
     }
 
