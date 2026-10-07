@@ -768,9 +768,14 @@ const handleIncomingPaymentReceipt = async (chatId, message, user, media) => {
         confMsg += `Una vez aprobado, el sistema le enviará una confirmación automática y habilitará el cargue de sus evidencias e información.`;
         await sendTelegramMessage(chatId, confMsg);
 
-        // Forward to admin
-        const approvalChatId = config.approvalTelegramChatId || process.env.TELEGRAM_ADMIN_CHAT_ID;
-        if (approvalChatId) {
+        // Forward to admin / approval IDs
+        const targetChatIds = Array.from(new Set([
+            config.approvalTelegramChatId,
+            ...(Array.isArray(config.approvalTelegramChatIds) ? config.approvalTelegramChatIds : []),
+            process.env.TELEGRAM_ADMIN_CHAT_ID
+        ].map(id => id ? String(id).trim() : null).filter(Boolean)));
+
+        if (targetChatIds.length > 0) {
             const adminCaption = `🔔 *NUEVO COMPROBANTE DE PAGO RECIBIDO*\n\n` +
                 `👤 *Funcionario:* ${contractorName}\n` +
                 `🪪 *Cédula:* ${contractorCedula || 'No registrada'}\n` +
@@ -788,17 +793,23 @@ const handleIncomingPaymentReceipt = async (chatId, message, user, media) => {
                 ]
             ];
 
-            const sent = await sendTelegramMediaWithKeyboard(
-                approvalChatId,
-                downloaded.absolutePath,
-                adminCaption,
-                adminKeyboard
-            );
+            for (const targetId of targetChatIds) {
+                try {
+                    const sent = await sendTelegramMediaWithKeyboard(
+                        targetId,
+                        downloaded.absolutePath,
+                        adminCaption,
+                        adminKeyboard
+                    );
 
-            if (sent && sent.message_id) {
-                receipt.adminTelegramChatId = approvalChatId;
-                receipt.adminTelegramMessageId = sent.message_id;
-                await receipt.save();
+                    if (sent && sent.message_id && !receipt.adminTelegramMessageId) {
+                        receipt.adminTelegramChatId = targetId;
+                        receipt.adminTelegramMessageId = sent.message_id;
+                        await receipt.save();
+                    }
+                } catch (sendErr) {
+                    console.error(`⚠️ [TelegramBot] No se pudo enviar comprobante al chat ${targetId}:`, sendErr.message);
+                }
             }
         } else {
             console.log('ℹ️ [TelegramBot] No hay approvalTelegramChatId configurado en PaymentConfig. El comprobante está en la BD para aprobación desde el panel web.');

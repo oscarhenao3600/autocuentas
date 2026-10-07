@@ -129,8 +129,14 @@ const ContractorsList = () => {
             setFeedback({ type: 'success', message: data.message });
             setContractors(prev => prev.map(c => c._id === userId ? { ...c, isPaymentExempt: data.isPaymentExempt } : c));
             if (selectedContractor && selectedContractor._id === userId) {
-                setSelectedContractor(prev => ({ ...prev, isPaymentExempt: data.isPaymentExempt }));
+                const updatedPeriods = (selectedContractor.periodsList || []).map(p => ({
+                    ...p,
+                    isPaid: p.actNumber === 1 || data.isPaymentExempt || p.paymentStatus === 'paid',
+                    paymentStatus: data.isPaymentExempt ? 'exempt' : (p.actNumber === 1 ? 'free_trial' : (p.paymentStatus === 'paid' ? 'paid' : 'pending_payment'))
+                }));
+                setSelectedContractor(prev => ({ ...prev, isPaymentExempt: data.isPaymentExempt, periodsList: updatedPeriods }));
             }
+            await fetchContractors();
         } catch (error) {
             console.error('Error al cambiar exención de pago:', error);
             setFeedback({
@@ -141,6 +147,7 @@ const ContractorsList = () => {
             setTimeout(() => setFeedback(null), 5000);
         }
     };
+
 
     const handleTogglePeriodPaid = async (periodId) => {
         try {

@@ -403,8 +403,20 @@ exports.toggleUserExemption = async (req, res) => {
         user.isPaymentExempt = !user.isPaymentExempt;
         if (!user.isPaymentExempt) {
             user.exemptReason = '';
-        } else if (req.body.exemptReason) {
-            user.exemptReason = String(req.body.exemptReason).trim();
+            // Si se quita la exención, volver a poner pendientes los periodos que solo estaban exentos
+            await BillingPeriod.updateMany(
+                { user: user._id, paymentStatus: 'exempt', actNumber: { $gt: 1 } },
+                { $set: { isPaid: false, paymentStatus: 'pending_payment' } }
+            );
+        } else {
+            if (req.body?.exemptReason) {
+                user.exemptReason = String(req.body.exemptReason).trim();
+            }
+            // Si se otorga exención, habilitar los periodos pendientes como exentos
+            await BillingPeriod.updateMany(
+                { user: user._id, isPaid: false, actNumber: { $gt: 1 } },
+                { $set: { isPaid: true, paymentStatus: 'exempt' } }
+            );
         }
 
         await user.save();
@@ -430,8 +442,8 @@ exports.togglePeriodPayment = async (req, res) => {
         period.paymentStatus = period.isPaid ? 'paid' : (period.actNumber === 1 ? 'free_trial' : 'pending_payment');
         if (period.isPaid) {
             period.paymentDate = new Date();
-            if (req.body.paymentAmount) period.paymentAmount = Number(req.body.paymentAmount);
-            if (req.body.paymentNotes) period.paymentNotes = String(req.body.paymentNotes).trim();
+            if (req.body?.paymentAmount) period.paymentAmount = Number(req.body.paymentAmount);
+            if (req.body?.paymentNotes) period.paymentNotes = String(req.body.paymentNotes).trim();
         } else {
             period.paymentDate = null;
         }
