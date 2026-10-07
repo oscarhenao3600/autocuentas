@@ -68,6 +68,8 @@ class StorageService {
             throw new Error('No se proporcionó buffer de archivo para guardar');
         }
 
+        const safeFilename = path.basename(filename || `archivo_${Date.now()}`);
+
         // Prepare local path as contingency / fallback
         const uploadsDir = path.resolve(__dirname, '..', 'uploads', ...pathSegments);
         const localFilePath = path.join(uploadsDir, safeFilename);
