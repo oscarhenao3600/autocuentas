@@ -11,6 +11,7 @@ const {
     createContractor,
     toggleUserExemption,
     togglePeriodPayment,
+    togglePeriodDiscard,
     deleteUser,
     getAllDocuments,
     deleteDocument,
@@ -33,6 +34,7 @@ router.get('/users', protect, admin, getRegisteredContractors);
 router.post('/users', protect, admin, createContractor);
 router.patch('/users/:id/toggle-exempt', protect, admin, toggleUserExemption);
 router.patch('/periods/:id/toggle-paid', protect, admin, togglePeriodPayment);
+router.patch('/periods/:id/toggle-discard', protect, admin, togglePeriodDiscard);
 router.delete('/users/:id', protect, admin, deleteUser);
 router.patch('/contracts/:id/delivery-date', protect, admin, updateContractDeliveryDate);
 router.get('/documents', protect, admin, getAllDocuments);

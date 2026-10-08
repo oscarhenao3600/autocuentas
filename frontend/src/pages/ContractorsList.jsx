@@ -180,6 +180,38 @@ const ContractorsList = () => {
         }
     };
 
+    const handleTogglePeriodDiscard = async (periodId) => {
+        try {
+            const { data } = await api.patch(`/admin/periods/${periodId}/toggle-discard`);
+            setFeedback({ type: 'success', message: data.message });
+            await fetchContractors();
+            if (selectedContractor) {
+                setSelectedContractor(prev => {
+                    const updatedPeriods = (prev.periodsList || []).map(p => {
+                        if (p._id === periodId) {
+                            return {
+                                ...p,
+                                isDiscarded: data.period.isDiscarded,
+                                status: data.period.status,
+                                discardedAt: data.period.discardedAt
+                            };
+                        }
+                        return p;
+                    });
+                    return { ...prev, periodsList: updatedPeriods };
+                });
+            }
+        } catch (error) {
+            console.error('Error al cambiar descarte del periodo:', error);
+            setFeedback({
+                type: 'error',
+                message: error.response?.data?.message || 'Error al actualizar el estado de la cuenta'
+            });
+        } finally {
+            setTimeout(() => setFeedback(null), 5000);
+        }
+    };
+
     const handleSaveDeliveryDate = async (clear = false) => {
         if (!selectedContractor) return;
         const contractId = selectedContractor.primaryContractId || selectedContractor.contracts?.[0]?._id;
@@ -1099,6 +1131,7 @@ const ContractorsList = () => {
                                             {selectedContractor.periodsList.map((p) => {
                                                 const isAct1 = p.actNumber === 1;
                                                 const isFreeOrPaid = isAct1 || selectedContractor.isPaymentExempt || p.isPaid;
+                                                const isDiscarded = Boolean(p.isDiscarded || p.status === 'discarded');
 
                                                 return (
                                                     <div
@@ -1109,17 +1142,28 @@ const ContractorsList = () => {
                                                             justifyContent: 'space-between',
                                                             padding: '0.65rem 0.85rem',
                                                             borderRadius: 'var(--radius-sm)',
-                                                            background: isFreeOrPaid ? 'rgba(16, 185, 129, 0.04)' : 'rgba(239, 68, 68, 0.04)',
-                                                            border: `1px solid ${isFreeOrPaid ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
+                                                            background: isDiscarded ? 'rgba(107, 114, 128, 0.05)' : (isFreeOrPaid ? 'rgba(16, 185, 129, 0.04)' : 'rgba(239, 68, 68, 0.04)'),
+                                                            border: isDiscarded ? '1px dashed rgba(156, 163, 175, 0.4)' : `1px solid ${isFreeOrPaid ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
                                                             flexWrap: 'wrap',
                                                             gap: '0.5rem'
                                                         }}
                                                     >
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                                            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+                                                            <span style={{ fontWeight: 700, fontSize: '0.9rem', color: isDiscarded ? 'var(--text-muted)' : 'inherit' }}>
                                                                 Acta N° {p.actNumber}
                                                             </span>
-                                                            {isAct1 ? (
+                                                            {isDiscarded ? (
+                                                                <span style={{
+                                                                    fontSize: '0.725rem',
+                                                                    fontWeight: 700,
+                                                                    padding: '0.15rem 0.5rem',
+                                                                    borderRadius: '10px',
+                                                                    background: 'rgba(107, 114, 128, 0.2)',
+                                                                    color: '#9ca3af'
+                                                                }}>
+                                                                    ⏭️ Descartada / Omitida
+                                                                </span>
+                                                            ) : isAct1 ? (
                                                                 <span style={{
                                                                     fontSize: '0.725rem',
                                                                     fontWeight: 700,
@@ -1166,25 +1210,46 @@ const ContractorsList = () => {
                                                             )}
                                                         </div>
 
-                                                        {!isAct1 && (
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                                             <button
                                                                 type="button"
-                                                                onClick={() => handleTogglePeriodPaid(p._id)}
+                                                                onClick={() => handleTogglePeriodDiscard(p._id)}
                                                                 className="btn"
+                                                                title={isDiscarded ? 'Restaurar / reactivar esta cuenta' : 'Descartar esta cuenta para que no bloquee periodos'}
                                                                 style={{
                                                                     fontSize: '0.75rem',
-                                                                    padding: '0.3rem 0.75rem',
+                                                                    padding: '0.3rem 0.65rem',
                                                                     fontWeight: 600,
-                                                                    background: p.isPaid ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.15)',
-                                                                    border: `1px solid ${p.isPaid ? 'rgba(245, 158, 11, 0.3)' : 'rgba(16, 185, 129, 0.4)'}`,
-                                                                    color: p.isPaid ? '#f59e0b' : '#10b981',
+                                                                    background: isDiscarded ? 'rgba(59, 130, 246, 0.12)' : 'rgba(107, 114, 128, 0.12)',
+                                                                    border: `1px solid ${isDiscarded ? 'rgba(59, 130, 246, 0.3)' : 'rgba(107, 114, 128, 0.3)'}`,
+                                                                    color: isDiscarded ? '#3b82f6' : 'var(--text-muted)',
                                                                     borderRadius: '4px',
                                                                     cursor: 'pointer'
                                                                 }}
                                                             >
-                                                                {p.isPaid ? 'Desmarcar Pago' : 'Marcar como Pagada / Habilitar'}
+                                                                {isDiscarded ? '🔄 Restaurar Cuenta' : '⏭️ Descartar'}
                                                             </button>
-                                                        )}
+
+                                                            {!isAct1 && !isDiscarded && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleTogglePeriodPaid(p._id)}
+                                                                    className="btn"
+                                                                    style={{
+                                                                        fontSize: '0.75rem',
+                                                                        padding: '0.3rem 0.75rem',
+                                                                        fontWeight: 600,
+                                                                        background: p.isPaid ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.15)',
+                                                                        border: `1px solid ${p.isPaid ? 'rgba(245, 158, 11, 0.3)' : 'rgba(16, 185, 129, 0.4)'}`,
+                                                                        color: p.isPaid ? '#f59e0b' : '#10b981',
+                                                                        borderRadius: '4px',
+                                                                        cursor: 'pointer'
+                                                                    }}
+                                                                >
+                                                                    {p.isPaid ? 'Desmarcar Pago' : 'Marcar como Pagada / Habilitar'}
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 );
                                             })}

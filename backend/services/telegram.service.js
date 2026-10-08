@@ -1076,6 +1076,107 @@ const selectOperatorUser = async (chatId, privilege, userId, editMessageId = nul
 };
 
 /**
+ * Shows dashboard/menu for a specific contract (handles transitions and payment checks)
+ */
+const showSingleContractMenu = async (chatId, user, contract, messageId = null) => {
+    const session = sessions.get(chatId) || {};
+    session.activeContractId = contract._id;
+    session.contractId = contract._id;
+    session.state = 'idle';
+    sessions.set(chatId, session);
+
+    let msg = `✅ Contrato Seleccionado:\n\n`;
+    msg += `📌 Contrato N°: ${contract.contractNumber || 'En trámite'}\n`;
+    msg += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n`;
+    msg += `👤 Supervisor: ${contract.supervisorName || 'No asignado'}\n`;
+    msg += `📅 Vigencia: ${contract.startDate ? contract.startDate.split('T')[0] : 'N/A'} al ${contract.endDate ? contract.endDate.split('T')[0] : 'N/A'}\n`;
+    msg += `⏱️ Plazo: ${getContractDurationText(contract)}\n`;
+    msg += `📝 Obligaciones: ${contract.activities ? contract.activities.length : 0} registradas\n\n`;
+
+    // Check if current target act requires payment or has transition pending
+    const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
+    if (activeInfo.hasTransitionPending) {
+        msg += `⚠️ *Aviso de Periodo:*\n`;
+        msg += `Tienes la *Cuenta ${activeInfo.unfinishedPreviousAct}* pendiente ${activeInfo.inGracePeriod ? `(⏳ Prórroga de radicación: ${activeInfo.graceDaysRemaining} día(s) restantes)` : '(por culminar)'}.\n`;
+        msg += `La *Cuenta ${activeInfo.targetAct}* ya se encuentra habilitada (${activeInfo.currentPeriod?.from} al ${activeInfo.currentPeriod?.to}).\n\n`;
+        msg += `¿Qué deseas gestionar para este contrato?`;
+
+        const keyboard = [
+            [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
+            [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+            [{ text: `⏭️ Descartar Cuenta ${activeInfo.unfinishedPreviousAct} (Omitir)`, callback_data: `discard_act_${activeInfo.unfinishedPreviousAct}` }],
+            [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
+            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+            [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }]
+        ];
+        if (sessions.get(chatId)?.isOperator) {
+            keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+        } else {
+            keyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+        }
+
+        if (messageId) {
+            await editTelegramMessage(chatId, messageId, msg, keyboard);
+        } else {
+            await sendTelegramKeyboardMessage(chatId, msg, keyboard);
+        }
+        return;
+    }
+
+    const { targetAct, currentPeriod } = activeInfo;
+    const access = await checkPeriodAccess(chatId, user, targetAct, currentPeriod);
+
+    if (!access.allowed) {
+        session.state = 'awaiting_payment_receipt';
+        session.awaitingPaymentForAct = targetAct;
+        session.paymentType = access.paymentType || 'individual';
+        sessions.set(chatId, session);
+
+        const paymentKeyboard = [
+            [{ text: `📷 Adjuntar Comprobante ($${Number(access.amount || 60000).toLocaleString('es-CO')})`, callback_data: access.paymentType === 'package' ? 'pay_package' : `pay_act_${targetAct}` }],
+            [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }]
+        ];
+        if (access.paymentType !== 'package') {
+            paymentKeyboard.push([{ text: '📦 Comprar Paquete (5 Cuentas x $100.000)', callback_data: 'buy_package' }]);
+        }
+        paymentKeyboard.push([{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }]);
+        if (sessions.get(chatId)?.isOperator) {
+            paymentKeyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+        } else {
+            paymentKeyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+        }
+
+        if (messageId) {
+            await editTelegramMessage(chatId, messageId, `${msg}\n${access.message}`, paymentKeyboard);
+        } else {
+            await sendTelegramKeyboardMessage(chatId, `${msg}\n${access.message}`, paymentKeyboard);
+        }
+        return;
+    }
+
+    msg += `¿Qué deseas gestionar para este contrato?`;
+
+    const keyboard = [
+        [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
+        [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+        [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
+        [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
+    ];
+
+    if (sessions.get(chatId)?.isOperator) {
+        keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
+    } else {
+        keyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
+    }
+
+    if (messageId) {
+        await editTelegramMessage(chatId, messageId, msg, keyboard);
+    } else {
+        await sendTelegramKeyboardMessage(chatId, msg, keyboard);
+    }
+};
+
+/**
  * Interactive menu to let contractors select which contract to work on
  */
 const showContractSelectionMenu = async (chatId, user, editMessageId = null) => {
@@ -1195,7 +1296,9 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
             const access = await checkPeriodAccess(chatId, user, p.actNumber, existing);
             let statusLabel = '';
 
-            if (existing && existing.zipDownloaded) {
+            if (existing && (existing.isDiscarded || existing.status === 'discarded')) {
+                statusLabel = ' (⏭️ Descartada)';
+            } else if (existing && existing.zipDownloaded) {
                 statusLabel = ' (✅ ZIP Generado)';
             } else if (p.actNumber === activeInfo.unfinishedPreviousAct && activeInfo.inGracePeriod) {
                 statusLabel = ` (⏳ Prórroga ${activeInfo.graceDaysRemaining}d)`;
@@ -1334,6 +1437,22 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
             });
         }
 
+        if (period.isDiscarded || period.status === 'discarded') {
+            const banner = getContractBanner(contract);
+            const text = `${banner}⏭️ *Cuenta ${actNumber} (Descartada / Omitida)*\n\nEsta cuenta fue descartada anteriormente para que no interfiera en la gestión de tus cuentas actuales.\n\n¿Deseas reactivarla para cargar evidencias o descargar su paquete?`;
+            const keyboard = [
+                [{ text: `🔄 Reactivar Cuenta ${actNumber}`, callback_data: `reactivate_act_${actNumber}` }],
+                [{ text: '📁 Volver a las Actas', callback_data: 'show_acts_menu' }],
+                [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
+            ];
+            if (editMessageId) {
+                await editTelegramMessage(chatId, editMessageId, text, keyboard);
+            } else {
+                await sendTelegramKeyboardMessage(chatId, text, keyboard);
+            }
+            return;
+        }
+
         if (period.status === 'approved') {
             const banner = getContractBanner(contract);
             const text = `${banner}⚠️ El Acta N. ${actNumber} ya ha sido Aprobada y no se puede modificar.\n\nPor favor selecciona otra acta.`;
@@ -1458,6 +1577,11 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         keyboard.push([
             { text: `📦 Descargar Paquete ZIP (Acta ${actNumber})`, callback_data: `download_zip_act_${actNumber}` }
         ]);
+        if (!period.zipDownloaded && period.status !== 'approved') {
+            keyboard.push([
+                { text: `⏭️ Descartar Cuenta ${actNumber} (Omitir)`, callback_data: `discard_act_${actNumber}` }
+            ]);
+        }
         keyboard.push([
             { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' },
             { text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }
@@ -1511,6 +1635,7 @@ const showObligationsFlow = async (chatId, user, editMessageId = null, forcedAct
             const keyboard = [
                 [{ text: `📝 Subir a Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
                 [{ text: `🚀 Subir a Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                [{ text: `⏭️ Descartar Cuenta ${activeInfo.unfinishedPreviousAct} (Omitir)`, callback_data: `discard_act_${activeInfo.unfinishedPreviousAct}` }],
                 [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
                 [{ text: `📊 Ver Todas las Actas`, callback_data: 'show_acts_menu' }]
             ];
@@ -2279,102 +2404,7 @@ const handleCallbackQuery = async (callbackQuery) => {
         if (!contract || contract.user.toString() !== user._id.toString()) {
             await sendTelegramMessage(chatId, '⚠️ Contrato no encontrado o no pertenece a tu usuario.');
             return;
-        }
-
-        const session = sessions.get(chatId) || {};
-        session.activeContractId = contract._id;
-        session.contractId = contract._id;
-        session.state = 'idle';
-        sessions.set(chatId, session);
-
-        let msg = `✅ Contrato Seleccionado:\n\n`;
-        msg += `📌 Contrato N°: ${contract.contractNumber || 'En trámite'}\n`;
-        msg += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n`;
-        msg += `👤 Supervisor: ${contract.supervisorName || 'No asignado'}\n`;
-        msg += `📅 Vigencia: ${contract.startDate ? contract.startDate.split('T')[0] : 'N/A'} al ${contract.endDate ? contract.endDate.split('T')[0] : 'N/A'}\n`;
-        msg += `⏱️ Plazo: ${getContractDurationText(contract)}\n`;
-        msg += `📝 Obligaciones: ${contract.activities ? contract.activities.length : 0} registradas\n\n`;
-
-        // Check if current target act requires payment or has transition pending
-        const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
-        if (activeInfo.hasTransitionPending) {
-            msg += `⚠️ *Aviso de Periodo:*\n`;
-            msg += `Tienes la *Cuenta ${activeInfo.unfinishedPreviousAct}* pendiente ${activeInfo.inGracePeriod ? `(⏳ Prórroga de radicación: ${activeInfo.graceDaysRemaining} día(s) restantes)` : '(por culminar)'}.\n`;
-            msg += `La *Cuenta ${activeInfo.targetAct}* ya se encuentra habilitada (${activeInfo.currentPeriod?.from} al ${activeInfo.currentPeriod?.to}).\n\n`;
-            msg += `¿Qué deseas gestionar para este contrato?`;
-
-            const keyboard = [
-                [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
-                [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
-                [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
-                [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
-                [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }]
-            ];
-            if (sessions.get(chatId)?.isOperator) {
-                keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
-            } else {
-                keyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
-            }
-
-            if (messageId) {
-                await editTelegramMessage(chatId, messageId, msg, keyboard);
-            } else {
-                await sendTelegramKeyboardMessage(chatId, msg, keyboard);
-            }
-            return;
-        }
-
-        const { targetAct, currentPeriod } = activeInfo;
-        const access = await checkPeriodAccess(chatId, user, targetAct, currentPeriod);
-
-        if (!access.allowed) {
-            session.state = 'awaiting_payment_receipt';
-            session.awaitingPaymentForAct = targetAct;
-            session.paymentType = access.paymentType || 'individual';
-            sessions.set(chatId, session);
-
-            const paymentKeyboard = [
-                [{ text: `📷 Adjuntar Comprobante ($${Number(access.amount || 60000).toLocaleString('es-CO')})`, callback_data: access.paymentType === 'package' ? 'pay_package' : `pay_act_${targetAct}` }],
-                [{ text: '💳 Ver Medios de Pago', callback_data: 'view_payment_methods' }]
-            ];
-            if (access.paymentType !== 'package') {
-                paymentKeyboard.push([{ text: '📦 Comprar Paquete (5 Cuentas x $100.000)', callback_data: 'buy_package' }]);
-            }
-            paymentKeyboard.push([{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }]);
-            if (sessions.get(chatId)?.isOperator) {
-                paymentKeyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
-            } else {
-                paymentKeyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
-            }
-
-            if (messageId) {
-                await editTelegramMessage(chatId, messageId, `${msg}\n${access.message}`, paymentKeyboard);
-            } else {
-                await sendTelegramKeyboardMessage(chatId, `${msg}\n${access.message}`, paymentKeyboard);
-            }
-            return;
-        }
-
-        msg += `¿Qué deseas gestionar para este contrato?`;
-
-        const keyboard = [
-            [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
-            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
-            [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
-            [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }]
-        ];
-
-        if (sessions.get(chatId)?.isOperator) {
-            keyboard.push([{ text: '👥 Cambiar de Funcionario', callback_data: 'operator_switch_user' }]);
-        } else {
-            keyboard.push([{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]);
-        }
-
-        if (messageId) {
-            await editTelegramMessage(chatId, messageId, msg, keyboard);
-        } else {
-            await sendTelegramKeyboardMessage(chatId, msg, keyboard);
-        }
+        await showSingleContractMenu(chatId, user, contract, messageId);
         return;
     } else if (data === 'add_new_contract') {
         sessions.set(chatId, {
@@ -2406,6 +2436,92 @@ const handleCallbackQuery = async (callbackQuery) => {
     } else if (data.startsWith('select_act_')) {
         const actNumber = parseInt(data.replace('select_act_', ''), 10);
         await selectActFlow(chatId, user, actNumber, messageId);
+    } else if (data.startsWith('discard_act_')) {
+        const actNumber = parseInt(data.replace('discard_act_', ''), 10);
+        const contract = await resolveActiveContract(chatId, user);
+        if (!contract) {
+            await sendTelegramMessage(chatId, '⚠️ No se pudo determinar el contrato activo.');
+            return;
+        }
+
+        const query = { user: user._id, actNumber, contract: contract._id };
+        let period = await BillingPeriod.findOne(query);
+
+        if (!period) {
+            const periodsTimeline = calculatePeriods(
+                contract.startDate,
+                contract.durationMonths || 1,
+                contract.additionDurationMonths || 0,
+                contract.periodType || 'mes_cumplido',
+                contract.endDate,
+                contract.customDeliveryDate
+            );
+            const periodInfo = periodsTimeline.find(p => p.actNumber === actNumber) || {
+                from: contract.startDate ? contract.startDate.toISOString().split('T')[0] : 'N/A',
+                to: contract.endDate ? contract.endDate.toISOString().split('T')[0] : 'N/A'
+            };
+
+            const specificActivities = (contract.activities || []).filter(act => !isGeneralObligation(act.description));
+            const initialActivities = specificActivities.map((act, idx) => ({
+                obligationCode: act.code || `2.2.${idx + 1}`,
+                obligationText: act.description,
+                comment: '',
+                evidences: []
+            }));
+
+            period = new BillingPeriod({
+                user: user._id,
+                contract: contract._id,
+                actNumber,
+                periodFrom: periodInfo.from !== 'N/A' ? new Date(periodInfo.from) : new Date(),
+                periodTo: periodInfo.to !== 'N/A' ? new Date(periodInfo.to) : new Date(),
+                isCustomCutoff: Boolean(periodInfo.isCustomCutoff),
+                activities: initialActivities,
+                isDiscarded: true,
+                status: 'discarded',
+                discardedAt: new Date()
+            });
+            await period.save();
+        } else {
+            period.isDiscarded = true;
+            period.status = 'discarded';
+            period.discardedAt = new Date();
+            await period.save();
+        }
+
+        const nextActive = await getContractCurrentActiveAct(user._id, contract._id, contract);
+
+        let confirmMsg = `⏭️ *Cuenta ${actNumber} descartada / omitida exitosamente.*\n\n`;
+        confirmMsg += `Ya no se te solicitará ni notificará sobre esta cuenta.\n`;
+        if (nextActive.targetAct && nextActive.targetAct !== actNumber) {
+            confirmMsg += `Ahora puedes gestionar directamente la *Cuenta ${nextActive.targetAct}*.\n\n`;
+        }
+        confirmMsg += `💡 _Nota: Si más adelante deseas presentarla, podrás reactivarla desde "📊 Resumen de Actas"._`;
+
+        await sendTelegramMessage(chatId, confirmMsg);
+        await showSingleContractMenu(chatId, user, contract, null);
+        return;
+    } else if (data.startsWith('reactivate_act_')) {
+        const actNumber = parseInt(data.replace('reactivate_act_', ''), 10);
+        const contract = await resolveActiveContract(chatId, user);
+        if (!contract) {
+            await sendTelegramMessage(chatId, '⚠️ No se pudo determinar el contrato activo.');
+            return;
+        }
+
+        const query = { user: user._id, actNumber, contract: contract._id };
+        const period = await BillingPeriod.findOne(query);
+        if (period) {
+            period.isDiscarded = false;
+            period.status = 'pending';
+            period.discardedAt = null;
+            await period.save();
+        }
+
+        await sendTelegramMessage(chatId, `🔄 *Cuenta ${actNumber} reactivada correctamente.*\n\nYa puedes cargar evidencias y comentarios para esta cuenta.`);
+        await selectActFlow(chatId, user, actNumber, null);
+        return;
+    }
     } else if (data.startsWith('select_obl_')) {
         const parts = data.split('_');
         const index = parseInt(parts[2], 10);
@@ -2951,6 +3067,7 @@ const handleIncomingMessage = async (message) => {
                             await sendTelegramKeyboardMessage(chatId, reply, [
                                 [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
                                 [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                                [{ text: `⏭️ Descartar Cuenta ${activeInfo.unfinishedPreviousAct} (Omitir)`, callback_data: `discard_act_${activeInfo.unfinishedPreviousAct}` }],
                                 [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
                                 [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
                                 [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }],
@@ -4471,6 +4588,7 @@ const handleIncomingMessage = async (message) => {
                         await sendTelegramKeyboardMessage(chatId, reply, [
                             [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
                             [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                            [{ text: `⏭️ Descartar Cuenta ${activeInfo.unfinishedPreviousAct} (Omitir)`, callback_data: `discard_act_${activeInfo.unfinishedPreviousAct}` }],
                             [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
                             [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
                             [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }],
@@ -4606,6 +4724,7 @@ const handleIncomingMessage = async (message) => {
                             await sendTelegramKeyboardMessage(chatId, reply, [
                                 [{ text: `📝 Continuar Cuenta ${activeInfo.unfinishedPreviousAct} ${activeInfo.inGracePeriod ? `(⏳ ${activeInfo.graceDaysRemaining}d)` : '(Pendiente)'}`, callback_data: `select_act_${activeInfo.unfinishedPreviousAct}` }],
                                 [{ text: `🚀 Iniciar Cuenta ${activeInfo.targetAct}`, callback_data: `select_act_${activeInfo.targetAct}` }],
+                                [{ text: `⏭️ Descartar Cuenta ${activeInfo.unfinishedPreviousAct} (Omitir)`, callback_data: `discard_act_${activeInfo.unfinishedPreviousAct}` }],
                                 [{ text: `📦 Descargar ZIP Cuenta ${activeInfo.unfinishedPreviousAct}`, callback_data: `download_zip_act_${activeInfo.unfinishedPreviousAct}` }],
                                 [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
                                 [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }],

@@ -114,8 +114,16 @@ const billingPeriodSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'approved', 'rejected'],
+        enum: ['pending', 'approved', 'rejected', 'discarded'],
         default: 'pending'
+    },
+    isDiscarded: {
+        type: Boolean,
+        default: false
+    },
+    discardedAt: {
+        type: Date,
+        default: null
     },
     isPaid: {
         type: Boolean,

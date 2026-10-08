@@ -488,11 +488,11 @@ const determineActiveAct = (contract, existingPeriods = [], currentDate = new Da
     }
     calendarAct = Math.min(calendarAct, enrichedPeriods.length);
 
-    // 2. Revisar actas en la base de datos descargadas/completadas
-    const downloadedPeriods = (existingPeriods || []).filter(p => p.zipDownloaded || p.status === 'completed' || p.status === 'approved');
+    // 2. Revisar actas en la base de datos descargadas/completadas o descartadas
+    const processedPeriods = (existingPeriods || []).filter(p => p.zipDownloaded || p.status === 'completed' || p.status === 'approved' || Boolean(p.isDiscarded) || p.status === 'discarded');
     let baseFromDb = 1;
-    if (downloadedPeriods.length > 0) {
-        baseFromDb = Math.max(...downloadedPeriods.map(p => p.actNumber)) + 1;
+    if (processedPeriods.length > 0) {
+        baseFromDb = Math.max(...processedPeriods.map(p => p.actNumber)) + 1;
     }
 
     // El acta objetivo general sugerida para radicar
@@ -507,11 +507,12 @@ const determineActiveAct = (contract, existingPeriods = [], currentDate = new Da
     let graceDaysRemaining = 0;
     let graceEndDateStr = null;
 
-    // Buscar entre las actas menores a targetAct si hay alguna sin descargar/aprobar
+    // Buscar entre las actas menores a targetAct si hay alguna sin descargar/aprobar y que NO esté descartada
     for (let actNum = 1; actNum < targetAct; actNum++) {
         const foundDb = (existingPeriods || []).find(p => p.actNumber === actNum);
         const isCompleted = foundDb && (foundDb.zipDownloaded || foundDb.status === 'completed' || foundDb.status === 'approved');
-        if (!isCompleted) {
+        const isDiscarded = foundDb && (Boolean(foundDb.isDiscarded) || foundDb.status === 'discarded');
+        if (!isCompleted && !isDiscarded) {
             unfinishedPreviousAct = actNum;
             unfinishedPeriod = foundDb || null;
 

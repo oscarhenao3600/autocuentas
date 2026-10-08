@@ -129,6 +129,8 @@ exports.getRegisteredContractors = async (req, res) => {
                     _id: p._id,
                     actNumber: p.actNumber,
                     status: p.status,
+                    isDiscarded: Boolean(p.isDiscarded || p.status === 'discarded'),
+                    discardedAt: p.discardedAt || null,
                     isPaid: p.isPaid || p.actNumber === 1 || Boolean(u.isPaymentExempt),
                     paymentStatus: u.isPaymentExempt ? 'exempt' : (p.actNumber === 1 ? 'free_trial' : (p.isPaid ? 'paid' : (p.paymentStatus || 'pending_payment'))),
                     paymentDate: p.paymentDate,
@@ -457,6 +459,28 @@ exports.togglePeriodPayment = async (req, res) => {
     } catch (error) {
         console.error('Error al actualizar estado de pago:', error);
         res.status(500).json({ message: 'Error al actualizar estado de pago', error: error.message });
+    }
+};
+
+// PATCH /api/admin/periods/:id/toggle-discard → Toggle discarded/omitted status of an act
+exports.togglePeriodDiscard = async (req, res) => {
+    try {
+        const period = await BillingPeriod.findById(req.params.id);
+        if (!period) return res.status(404).json({ message: 'Periodo no encontrado' });
+
+        period.isDiscarded = !period.isDiscarded;
+        period.status = period.isDiscarded ? 'discarded' : 'pending';
+        period.discardedAt = period.isDiscarded ? new Date() : null;
+
+        await period.save();
+
+        res.json({
+            message: `Acta N° ${period.actNumber} ahora está ${period.isDiscarded ? 'DESCARTADA / OMITIDA' : 'ACTIVA / RESTAURADA'}`,
+            period
+        });
+    } catch (error) {
+        console.error('Error al cambiar estado descartado de periodo:', error);
+        res.status(500).json({ message: 'Error al cambiar estado de descarte', error: error.message });
     }
 };
 
