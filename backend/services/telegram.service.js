@@ -9,7 +9,7 @@ const PaymentReceipt = require('../models/PaymentReceipt');
 const geminiService = require('./gemini.service');
 const storageService = require('./storage.service');
 const { generateBillingPackage } = require('../controllers/billing.controller');
-const { calculatePeriods, determineActiveAct, filterSpecificObligations, isGeneralObligation, getContractDurationText } = require('../utils/period.utils');
+const { calculatePeriods, determineActiveAct, filterSpecificObligations, isGeneralObligation, getContractDurationText, formatFullContractNumber, isSecretariaTicContract } = require('../utils/period.utils');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let lastUpdateId = 0;
@@ -860,7 +860,7 @@ const getContractBanner = (contract, chatId = null) => {
     }
     if (contract) {
         const contractor = contract.contractorName ? ` | ${contract.contractorName}` : '';
-        const num = contract.contractNumber || 'En trámite';
+        const num = formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'En trámite';
         const entity = contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia';
         const sup = contract.supervisorName || 'No asignado';
         header += `📌 CONTRATO: ${num}${contractor}\n🏛️ ${entity} | Supervisor: ${sup}\n`;
@@ -1039,7 +1039,7 @@ const selectOperatorUser = async (chatId, privilege, userId, editMessageId = nul
         reply += `━━━━━━━━━━━━━━━━━━━━\n`;
         reply += `👤 FUNCIONARIO ACTIVO: ${user.fullName}\n`;
         reply += `🪪 Cédula: ${contract?.idNumber || 'Sin cédula'}\n`;
-        reply += `📋 Contrato: ${contract?.contractNumber || 'En trámite'}\n`;
+        reply += `📋 Contrato: ${formatFullContractNumber(contract?.contractNumber, contract?.internalContractNumber) || 'En trámite'}\n`;
         reply += `🏛️ Entidad: ${contract?.entityName || contract?.supervisorDependency || 'Alcaldía de Armenia'}\n`;
         reply += `━━━━━━━━━━━━━━━━━━━━\n\n`;
 
@@ -1086,7 +1086,7 @@ const showSingleContractMenu = async (chatId, user, contract, messageId = null) 
     sessions.set(chatId, session);
 
     let msg = `✅ Contrato Seleccionado:\n\n`;
-    msg += `📌 Contrato N°: ${contract.contractNumber || 'En trámite'}\n`;
+    msg += `📌 Contrato N°: ${formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'En trámite'}\n`;
     msg += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n`;
     msg += `👤 Supervisor: ${contract.supervisorName || 'No asignado'}\n`;
     msg += `📅 Vigencia: ${contract.startDate ? contract.startDate.split('T')[0] : 'N/A'} al ${contract.endDate ? contract.endDate.split('T')[0] : 'N/A'}\n`;
@@ -1208,7 +1208,7 @@ const showContractSelectionMenu = async (chatId, user, editMessageId = null) => 
         const keyboard = [];
 
         contracts.forEach((c, idx) => {
-            const num = c.contractNumber || 'En trámite';
+            const num = formatFullContractNumber(c.contractNumber, c.internalContractNumber) || 'En trámite';
             const entity = c.entityName || c.supervisorDependency || 'Alcaldía';
             const icon = idx === 0 ? '1️⃣' : idx === 1 ? '2️⃣' : idx === 2 ? '3️⃣' : '📄';
             text += `${icon} Contrato N° ${num}\n`;
@@ -1516,7 +1516,7 @@ const selectActFlow = async (chatId, user, actNumber, editMessageId = null) => {
         }
 
         if (!period.activities || period.activities.length === 0) {
-            const emptyMsg = `⚠️ El Contrato N° ${contract.contractNumber || 'registrado'} aún no tiene obligaciones registradas en el sistema.\n\nPuedes subir la minuta escribiendo /documentos para extraerlas automáticamente.`;
+            const emptyMsg = `⚠️ El Contrato N° ${formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'registrado'} aún no tiene obligaciones registradas en el sistema.\n\nPuedes subir la minuta escribiendo /documentos para extraerlas automáticamente.`;
             const keyboard = [
                 [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
             ];
@@ -2010,6 +2010,45 @@ const promptDocComprobante = async (chatId, user, billingPeriodId = null) => {
 };
 
 /**
+ * Prompts user for Acuerdo de Confidencialidad (specifically for Secretaría TIC)
+ */
+const promptConfidentialityDoc = async (chatId, user) => {
+    sessions.set(chatId, {
+        state: 'awaiting_doc_confidencialidad',
+        userId: user._id
+    });
+
+    let text = `🏛️ *Paso Especial: Acuerdo de Confidencialidad (Secretaría TIC)*\n\n`;
+    text += `Para contratos de la **Secretaría TIC (Alcaldía de Armenia)**, se debe relacionar el **Número de Contrato Interno** (ejemplo: \`TIC-CD-2026-092\`) en todos los formatos oficiales.\n\n`;
+    text += `📍 *¿Dónde encontrarlo?*\n`;
+    text += `En SECOP II: Menú *Mis contratos → Punto 5: Documentos del contrato* (debajo de la minuta). Descarga el archivo \`confidencialidad.pdf\` (aparece en la **Cláusula Cuarta**).\n\n`;
+    text += `👉 *¿Cómo registrarlo?*\n`;
+    text += `1. **Adjunta aquí el archivo PDF** o foto de \`confidencialidad.pdf\` para que la IA extraiga el número automáticamente.\n`;
+    text += `2. O simplemente **escribe el número interno** aquí en el chat (ej: \`TIC-CD-2026-092\`).\n\n`;
+    text += `💡 También puedes presionar "Saltar este paso":`;
+
+    await sendTelegramKeyboardMessage(chatId, text, [
+        [{ text: '⏩ Saltar este paso', callback_data: 'skip_doc_confidencialidad' }]
+    ]);
+};
+
+/**
+ * Checks if contract is from Secretaría TIC and lacks internal number, otherwise finishes docs flow
+ */
+const checkTicOrFinishDocs = async (chatId, user) => {
+    try {
+        const contract = await resolveActiveContract(chatId, user) || await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
+        if (contract && isSecretariaTicContract(contract) && !contract.internalContractNumber) {
+            await promptConfidentialityDoc(chatId, user);
+            return;
+        }
+    } catch (err) {
+        console.error('Error checking TIC contract:', err);
+    }
+    await finishDocsFlow(chatId, user);
+};
+
+/**
  * Finish documents collection flow and present contract summary card
  */
 const finishDocsFlow = async (chatId, user) => {
@@ -2024,11 +2063,19 @@ const finishDocsFlow = async (chatId, user) => {
         });
 
         const oblCount = (contract && contract.activities) ? contract.activities.length : 0;
+        const contractNumFormatted = contract ? formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) : 'Pendiente';
         let summaryMsg = `🎉 ¡Carga y procesamiento de documentos finalizada!\n\n`;
         summaryMsg += `📋 Resumen de tu Contrato:\n`;
         summaryMsg += `• Funcionario: ${contract ? (contract.contractorName || user.fullName) : user.fullName}\n`;
         summaryMsg += `• Cédula: ${contract ? (contract.idNumber || 'N/A') : 'N/A'}\n`;
-        summaryMsg += `• Contrato N°: ${contract && contract.contractNumber ? contract.contractNumber : 'Pendiente'}\n`;
+        summaryMsg += `• Contrato N°: ${contractNumFormatted}\n`;
+        if (contract && isSecretariaTicContract(contract)) {
+            if (contract.internalContractNumber) {
+                summaryMsg += `• Contrato Interno TIC: ${contract.internalContractNumber} (Cláusula 4ta)\n`;
+            } else {
+                summaryMsg += `• Contrato Interno TIC: ⚠️ Pendiente (requerido para formatos Secretaría TIC)\n`;
+            }
+        }
         summaryMsg += `• Entidad: ${contract ? (contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia') : 'Alcaldía de Armenia'}\n`;
         summaryMsg += `• Fecha Inicio: ${contract && contract.startDate ? contract.startDate.split('T')[0] : 'Pendiente'}\n`;
         summaryMsg += `• Fecha Fin: ${contract && contract.endDate ? contract.endDate.split('T')[0] : 'Pendiente'}\n`;
@@ -2047,13 +2094,20 @@ const finishDocsFlow = async (chatId, user) => {
             summaryMsg += `⚠️ No se detectaron obligaciones en la minuta (o se omitió el documento). Podrás volver a subir los documentos escribiendo /documentos.`;
         }
 
-        await sendTelegramKeyboardMessage(chatId, summaryMsg, [
+        const buttons = [
             [{ text: '📂 Subir Evidencia', callback_data: 'subir_evidencia' }],
-            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
+            [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }]
+        ];
+        if (contract && isSecretariaTicContract(contract) && !contract.internalContractNumber) {
+            buttons.push([{ text: '🏛️ Cargar Confidencialidad TIC', callback_data: 'upload_confidencialidad' }]);
+        }
+        buttons.push(
             [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
             [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
             [{ text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }]
-        ]);
+        );
+
+        await sendTelegramKeyboardMessage(chatId, summaryMsg, buttons);
     } catch (err) {
         console.error('Error en finishDocsFlow:', err);
         await sendTelegramMessage(chatId, '❌ Error al finalizar la configuración de documentos.');
@@ -2380,7 +2434,14 @@ const handleCallbackQuery = async (callbackQuery) => {
         return;
     } else if (data === 'skip_doc_comprobante') {
         await sendTelegramMessage(chatId, '⏩ Comprobante de pago omitido.');
+        if (user) await checkTicOrFinishDocs(chatId, user);
+        return;
+    } else if (data === 'skip_doc_confidencialidad') {
+        await sendTelegramMessage(chatId, '⏩ Acuerdo de Confidencialidad omitido.');
         if (user) await finishDocsFlow(chatId, user);
+        return;
+    } else if (data === 'upload_confidencialidad') {
+        if (user) await promptConfidentialityDoc(chatId, user);
         return;
     }
 
@@ -2766,7 +2827,7 @@ const handleIncomingMessage = async (message) => {
             const activeUser = await User.findById(session.activeUserId);
             const contract = session.activeContractId ? await Contract.findById(session.activeContractId) : null;
             msg += `👤 Funcionario en gestión: ${activeUser?.fullName || 'Desconocido'}\n`;
-            if (contract) msg += `📋 Contrato: ${contract.contractNumber || 'En trámite'} (${contract.entityName || 'Alcaldía'})\n`;
+            if (contract) msg += `📋 Contrato: ${formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'En trámite'} (${contract.entityName || 'Alcaldía'})\n`;
         } else {
             msg += `👤 Funcionario en gestión: Ninguno seleccionado aún\n`;
         }
@@ -3041,7 +3102,7 @@ const handleIncomingMessage = async (message) => {
                     let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
                     reply += `👤 Funcionario: ${contractorName}\n`;
                     reply += `🪪 Cédula: ${contract.idNumber || inputCedula}\n`;
-                    reply += `📋 Contrato: ${contract.contractNumber || 'En trámite'}\n`;
+                    reply += `📋 Contrato: ${formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'En trámite'}\n`;
                     reply += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n\n`;
                     reply += `Tu usuario ha sido verificado con éxito en la base de datos.\n\n`;
 
@@ -3401,7 +3462,7 @@ const handleIncomingMessage = async (message) => {
 
                 const oblCount = newContract.activities ? newContract.activities.length : 0;
                 let reply = `🎉 ¡Nuevo contrato registrado exitosamente!\n\n`;
-                reply += `📌 Contrato N°: ${newContract.contractNumber || 'En trámite'}\n`;
+                reply += `📌 Contrato N°: ${formatFullContractNumber(newContract.contractNumber, newContract.internalContractNumber) || 'En trámite'}\n`;
                 reply += `🏛️ Entidad: ${newContract.entityName || newContract.supervisorDependency || 'Alcaldía'}\n`;
                 reply += `👤 Supervisor: ${newContract.supervisorName || 'No asignado'}\n`;
                 reply += `⏱️ Plazo: ${getContractDurationText(newContract)}\n`;
@@ -3514,7 +3575,7 @@ const handleIncomingMessage = async (message) => {
                     sessions.set(chatId, session);
 
                     const oblCount = contract.activities ? contract.activities.length : 0;
-                    await sendTelegramMessage(chatId, `✅ Minuta procesada con éxito.\n📋 Contrato N°: ${contract.contractNumber || 'Registrado'}\n🏛️ Entidad: ${contract.entityName || 'Alcaldía'}\n📝 Obligaciones identificadas: ${oblCount}`);
+                    await sendTelegramMessage(chatId, `✅ Minuta procesada con éxito.\n📋 Contrato N°: ${formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'Registrado'}\n🏛️ Entidad: ${contract.entityName || 'Alcaldía'}\n📝 Obligaciones identificadas: ${oblCount}`);
                 } catch (aiErr) {
                     console.error('Error de IA en Minuta:', aiErr);
                     await contract.save();
@@ -4112,7 +4173,7 @@ const handleIncomingMessage = async (message) => {
 
             if (isSkip(text)) {
                 await sendTelegramMessage(chatId, '⏩ Comprobante de pago omitido.');
-                await finishDocsFlow(chatId, user);
+                await checkTicOrFinishDocs(chatId, user);
                 return;
             }
 
@@ -4141,7 +4202,74 @@ const handleIncomingMessage = async (message) => {
                 console.error('Error al guardar comprobante de pago SS:', err);
                 await sendTelegramMessage(chatId, `⚠️ No se pudo guardar el comprobante: ${err.message}`);
             }
-            await finishDocsFlow(chatId, user);
+            await checkTicOrFinishDocs(chatId, user);
+            return;
+        }
+
+        // Doc Step 8: Acuerdo de Confidencialidad (Secretaría TIC)
+        if (session.state === 'awaiting_doc_confidencialidad') {
+            const user = (session.userId ? await User.findById(session.userId) : null) || await User.findOne({ telegramChatId: chatId });
+            if (!user) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión no válida. Escribe "hola" para identificarte.');
+                return;
+            }
+
+            if (isSkip(text)) {
+                await sendTelegramMessage(chatId, '⏩ Acuerdo de Confidencialidad omitido.');
+                await finishDocsFlow(chatId, user);
+                return;
+            }
+
+            let contract = (session.activeContractId || session.contractId)
+                ? await Contract.findById(session.activeContractId || session.contractId)
+                : await Contract.findOne({ user: user._id }).sort({ createdAt: -1 });
+
+            const media = extractTelegramFile(message);
+            if (media) {
+                await sendTelegramMessage(chatId, '⏳ Descargando Acuerdo de Confidencialidad y analizando Cláusula Cuarta con IA...');
+                try {
+                    const fileInfo = await downloadTelegramMedia(media.fileId, 'confidencialidad', media.originalName, media.mimeType);
+                    if (contract) {
+                        contract.confidentialityDocPath = fileInfo.relativePath;
+                        try {
+                            const extracted = await geminiService.extractConfidentialityData(fileInfo.absolutePath);
+                            if (extracted && extracted.internalContractNumber) {
+                                contract.internalContractNumber = extracted.internalContractNumber;
+                            }
+                            await contract.save();
+                            const fullNo = formatFullContractNumber(contract.contractNumber, contract.internalContractNumber);
+                            await sendTelegramMessage(chatId, `✅ Acuerdo de Confidencialidad procesado con éxito.\n🏛️ Contrato Interno detectado: ${contract.internalContractNumber || 'No identificado'}\n📋 Formato oficial: ${fullNo}`);
+                        } catch (aiErr) {
+                            console.error('Error de IA en Confidencialidad:', aiErr);
+                            await contract.save();
+                            await sendTelegramMessage(chatId, `⚠️ Se guardó el documento, pero no se pudo extraer el número automáticamente (${aiErr.message}).`);
+                        }
+                    }
+                } catch (err) {
+                    console.error('Error al procesar Confidencialidad:', err);
+                    await sendTelegramMessage(chatId, `❌ Error al procesar archivo: ${err.message}`);
+                }
+                await finishDocsFlow(chatId, user);
+                return;
+            }
+
+            // User typed text as internal contract number
+            if (text && text.trim().length > 3) {
+                const cleanInternal = text.trim().replace(/^\(|\)$/g, '').trim();
+                if (contract) {
+                    contract.internalContractNumber = cleanInternal;
+                    await contract.save();
+                    const fullNo = formatFullContractNumber(contract.contractNumber, contract.internalContractNumber);
+                    await sendTelegramMessage(chatId, `✅ Número de contrato interno guardado: ${cleanInternal}\n📋 Formato final para todos los documentos: ${fullNo}`);
+                }
+                await finishDocsFlow(chatId, user);
+                return;
+            }
+
+            await sendTelegramKeyboardMessage(chatId, '⚠️ Por favor adjunta el archivo PDF de confidencialidad o escribe el número interno (ej: TIC-CD-2026-092), o presiona saltar:', [
+                [{ text: '⏩ Saltar este paso', callback_data: 'skip_doc_confidencialidad' }]
+            ]);
             return;
         }
 
@@ -4406,7 +4534,7 @@ const handleIncomingMessage = async (message) => {
                     reply += `━━━━━━━━━━━━━━━━━━━━\n`;
                     reply += `👤 FUNCIONARIO ACTIVO: ${activeUser.fullName}\n`;
                     reply += `🪪 Cédula: ${contract?.idNumber || 'Sin cédula'}\n`;
-                    reply += `📋 Contrato: ${contract?.contractNumber || 'En trámite'}\n`;
+                    reply += `📋 Contrato: ${formatFullContractNumber(contract?.contractNumber, contract?.internalContractNumber) || 'En trámite'}\n`;
                     reply += `🏛️ Entidad: ${contract?.entityName || contract?.supervisorDependency || 'Alcaldía de Armenia'}\n`;
                     reply += `━━━━━━━━━━━━━━━━━━━━\n\n`;
                     reply += `¿Qué deseas gestionar para ${activeUser.fullName}?`;
@@ -4562,7 +4690,7 @@ const handleIncomingMessage = async (message) => {
                 let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
                 reply += `👤 Funcionario: ${contractorName}\n`;
                 reply += `🪪 Cédula: ${contract.idNumber || numericOnly}\n`;
-                reply += `📋 Contrato: ${contract.contractNumber || 'En trámite'}\n`;
+                reply += `📋 Contrato: ${formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'En trámite'}\n`;
                 reply += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n\n`;
                 reply += `Tu usuario ha sido verificado con éxito en la base de datos.\n\n`;
 
@@ -4914,6 +5042,21 @@ const handleIncomingMessage = async (message) => {
                 return;
             }
         }
+    } else if (
+        text === '/confidencialidad' ||
+        text.toLowerCase() === 'confidencialidad' ||
+        text === '/tic' ||
+        text.toLowerCase() === 'contrato interno' ||
+        text === '/interno'
+    ) {
+        const user = await resolveActiveUser(chatId);
+        if (!user) {
+            sessions.set(chatId, { state: 'awaiting_identification' });
+            await sendTelegramMessage(chatId, 'bienvenido al sistema de generacion de cuentas, enviame tu numero de documento de identidad sin puntos, solo numeros porfa');
+            return;
+        }
+        await promptConfidentialityDoc(chatId, user);
+        return;
     } else if (text === '/documentos' || text.toLowerCase() === 'documentos' || text.toLowerCase() === 'cargar documentos' || text.toLowerCase() === 'subir documentos') {
         const user = await resolveActiveUser(chatId);
         if (!user) {
@@ -4934,6 +5077,30 @@ const handleIncomingMessage = async (message) => {
             const media = extractTelegramFile(message);
             const caption = (message.caption || '').toLowerCase();
             const fileName = (message.document?.file_name || '').toLowerCase();
+
+            const isConfidentialityFile = caption.includes('confidencial') || fileName.includes('confidencial');
+            if (media && isConfidentialityFile) {
+                const contract = await resolveActiveContract(chatId, user);
+                if (contract) {
+                    await sendTelegramMessage(chatId, '⏳ Analizando Acuerdo de Confidencialidad y extrayendo Cláusula Cuarta con Inteligencia Artificial...');
+                    try {
+                        const fileInfo = await downloadTelegramMedia(media.fileId, 'confidencialidad', media.originalName, media.mimeType);
+                        contract.confidentialityDocPath = fileInfo.relativePath;
+                        const extracted = await geminiService.extractConfidentialityData(fileInfo.absolutePath);
+                        if (extracted && extracted.internalContractNumber) {
+                            contract.internalContractNumber = extracted.internalContractNumber;
+                        }
+                        await contract.save();
+                        const fullNo = formatFullContractNumber(contract.contractNumber, contract.internalContractNumber);
+                        await sendTelegramMessage(chatId, `✅ Acuerdo de Confidencialidad procesado con éxito.\n🏛️ Contrato Interno detectado: ${contract.internalContractNumber || 'No identificado'}\n📋 Formato final oficial: ${fullNo}`);
+                        return;
+                    } catch (err) {
+                        console.error('Error procesando confidencialidad espontáneo:', err);
+                        await sendTelegramMessage(chatId, `⚠️ Se recibió el documento pero hubo un error extrayendo los datos: ${err.message}`);
+                        return;
+                    }
+                }
+            }
 
             const isComprobanteSSFile = (caption.includes('comprobante') || caption.includes('recibo') || caption.includes('soporte') ||
                                          fileName.includes('comprobante') || fileName.includes('recibo') || fileName.includes('soporte')) &&

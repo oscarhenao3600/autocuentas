@@ -23,6 +23,10 @@ const contractSchema = new mongoose.Schema({
     idNumber: String,
     contractType: String,
     contractNumber: String,
+    internalContractNumber: {
+        type: String,
+        default: ""
+    },
     startDate: String,
     endDate: String,
     cdp: String,
@@ -160,6 +164,10 @@ const contractSchema = new mongoose.Schema({
     bankCertificatePath: String,
     securitySocialPath: String,
     stampsPath: String,
+    confidentialityDocPath: {
+        type: String,
+        default: ""
+    },
     lastEvidenceReminderDate: {
         type: String,
         default: ""

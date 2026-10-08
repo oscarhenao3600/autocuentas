@@ -78,7 +78,8 @@ exports.extractContractData = async (filePath, options = {}) => {
             - contractorName (Nombre completo o Razón Social del contratista)
             - idNumber (Número de identificación, Cédula o NIT)
             - contractType (Clase o tipo de contrato, ej: Prestación de Servicios de Apoyo a la Gestión o Profesionales)
-            - contractNumber (Número de contrato, ej: 042-2026 o TIC-CD-2026-055 o CO1.PCCNTR.9868582)
+            - contractNumber (Número de contrato oficial de SECOP II, ej: CO1.PCCNTR.9868582 o 042-2026. Si el texto tiene ambos, ej: 'CO1.PCCNTR.9868346 (TIC-CD-2026-092)', pon 'CO1.PCCNTR.9868346' aquí)
+            - internalContractNumber (Número de contrato interno de la secretaría o dependencia si figura en la minuta, ej: TIC-CD-2026-092 o TIC-CD-2026-055)
             - startDate (Fecha oficial de inicio de ejecución en formato YYYY-MM-DD. ADVERTENCIA: NO tomes la fecha de expedición del registro presupuestal RP, ni de expedición del CDP, ni la fecha de hoy. Si la minuta estipula que el plazo inicia con el Acta de Inicio o con la configuración en SECOP II y NO incluye una fecha exacta de calendario, déjalo como string vacío "")
             - endDate (Fecha de terminación o plazo de ejecución expresado en la minuta, ej: "2026-12-20" o fecha calculada. Si no hay fecha exacta de calendario, déjalo vacío "")
             - executionTerm (Texto literal completo del plazo de ejecución exactamente como aparece en la cláusula o campo de "PLAZO DE EJECUCIÓN" de la minuta, ej: "CIENTO QUINCE (115) DIAS CALENDARIO CONTADOS A PARTIR DE LA CONFIGURACIÓN DEL INICIO EN LA PLATAFORMA SECOP II." o "115 DÍAS CALENDARIO" o "CUATRO (04) MESES")
@@ -121,7 +122,20 @@ exports.extractContractData = async (filePath, options = {}) => {
         const response = await result.response;
         const jsonText = response.text().replace(/```json|```/g, "").trim();
         
-        return JSON.parse(jsonText);
+        const parsed = JSON.parse(jsonText);
+        if (parsed.contractNumber && parsed.contractNumber.includes('(')) {
+            const match = parsed.contractNumber.match(/^([^(]+)\s*\(([^)]+)\)/);
+            if (match) {
+                parsed.contractNumber = match[1].trim();
+                if (!parsed.internalContractNumber) {
+                    parsed.internalContractNumber = match[2].trim();
+                }
+            }
+        }
+        if (parsed.internalContractNumber) {
+            parsed.internalContractNumber = String(parsed.internalContractNumber).replace(/[()]/g, '').trim();
+        }
+        return parsed;
     } catch (error) {
         console.error("Error en Gemini Service:", error);
         throw new Error("No se pudo procesar el documento con IA");
@@ -250,6 +264,71 @@ exports.extractAdditionContractData = async (filePath, options = {}) => {
     } catch (error) {
         console.error("Error en extractAdditionContractData:", error);
         throw new Error("No se pudo procesar la adición con IA");
+    }
+};
+
+exports.extractConfidentialityData = async (filePath, options = {}) => {
+    try {
+        const { buffer: dataBuffer, filename, isPdf, isImage } = await resolveInputBuffer(filePath, options);
+        let text = "";
+        let useMultimodal = false;
+
+        if (isPdf) {
+            try {
+                text = await parsePdfText(dataBuffer);
+                if (!text || text.trim().length < 100) {
+                    useMultimodal = true;
+                }
+            } catch (err) {
+                console.warn("Extracción de texto Confidencialidad falló, usando Gemini multimodal OCR:", err.message);
+                useMultimodal = true;
+            }
+        } else if (isImage) {
+            useMultimodal = true;
+        } else {
+            text = dataBuffer.toString();
+        }
+
+        const prompt = `
+            Analiza el siguiente documento de Compromiso / Acuerdo de Confidencialidad (común en la Alcaldía de Armenia / Secretaría TIC) y extrae la información en formato JSON puro (sin markdown).
+            
+            Contexto muy importante:
+            En este documento (particularmente en la CLÁUSULA CUARTA o en el cuerpo del compromiso donde se indica el contrato correspondiente), se referencia el número de contrato interno asignado al contratista por la dependencia (por ejemplo: "TIC-CD-2026-092", "TIC-CD-2026-055", "TIC-2026-014", "042-2026", etc.).
+            
+            Campos requeridos:
+            - internalContractNumber (El número o código de contrato interno exacto que aparece en la Cláusula Cuarta o cuerpo del documento, ej: "TIC-CD-2026-092". Debe incluir el prefijo completo si existe como 'TIC-CD-...')
+            - contractNumber (El número de contrato oficial de SECOP II si aparece, ej: "CO1.PCCNTR.9868346", de lo contrario "")
+            - contractorName (Nombre completo del contratista firmante si aparece)
+            - idNumber (Cédula o NIT del contratista si aparece)
+            - clauseText (Texto o extracto del párrafo o cláusula donde se menciona el número de contrato interno)
+        `;
+
+        let result;
+        if (useMultimodal) {
+            const mimeType = isPdf ? "application/pdf" : (options.mimetype || (filename && filename.toLowerCase().endsWith('.png') ? "image/png" : "image/jpeg"));
+            const filePart = {
+                inlineData: {
+                    data: dataBuffer.toString("base64"),
+                    mimeType: mimeType
+                }
+            };
+            result = await generateAIContent([prompt, filePart]);
+        } else {
+            result = await generateAIContent(`${prompt}\n\nTexto del documento de confidencialidad:\n${text.substring(0, 30000)}`);
+        }
+
+        const response = await result.response;
+        const jsonText = response.text().replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(jsonText);
+
+        if (parsed.internalContractNumber) {
+            parsed.internalContractNumber = String(parsed.internalContractNumber).replace(/[()]/g, '').trim();
+        }
+
+        return parsed;
+    } catch (error) {
+        console.error("Error en extractConfidentialityData:", error);
+        throw new Error("No se pudo procesar el documento de confidencialidad con IA: " + error.message);
     }
 };
 

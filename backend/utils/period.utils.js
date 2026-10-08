@@ -626,6 +626,45 @@ function formatRubroPresupuestal(rawRubro = '', rawFuente = '') {
     return rubroCode;
 }
 
+/**
+ * Concatena y formatea el número de contrato oficial con el número interno (ej: para Secretaría TIC)
+ * Formato oficial: [CONTRATO_SECOP]([CONTRATO_INTERNO])
+ * Ej: "CO1.PCCNTR.9868346(TIC-CD-2026-092)"
+ */
+function formatFullContractNumber(baseNumber = '', internalNumber = '') {
+    const cleanBase = String(baseNumber || '').trim();
+    let cleanInternal = String(internalNumber || '').trim();
+
+    if (!cleanBase && !cleanInternal) return '';
+    if (!cleanInternal) return cleanBase;
+
+    // Remover posibles paréntesis externos redundantes del número interno
+    cleanInternal = cleanInternal.replace(/^\((.*)\)$/, '$1').trim();
+    if (!cleanInternal) return cleanBase;
+
+    if (!cleanBase) return `(${cleanInternal})`;
+
+    // Si cleanBase ya incluye cleanInternal, retornar cleanBase directamente sin duplicar
+    if (cleanBase.includes(cleanInternal)) {
+        return cleanBase;
+    }
+
+    return `${cleanBase}(${cleanInternal})`;
+}
+
+/**
+ * Determina si el contrato pertenece a la Secretaría TIC de la Alcaldía de Armenia
+ */
+function isSecretariaTicContract(contract = {}) {
+    if (!contract) return false;
+    const dep = String(contract.supervisorDependency || '').toLowerCase();
+    const ue = String(contract.unidadEjecutora || '').toLowerCase();
+    const uec = String(contract.unidadEjecutoraCodigo || '').trim();
+    const num = String(contract.contractNumber || '').toLowerCase();
+    const intNum = String(contract.internalContractNumber || '').toLowerCase();
+    return uec === '11401' || dep.includes('tic') || ue.includes('tic') || num.includes('tic') || intNum.includes('tic');
+}
+
 module.exports = {
     calculatePeriods,
     calculateSocialSecurity,
@@ -634,7 +673,9 @@ module.exports = {
     filterSpecificObligations,
     formatDateStr,
     getContractDurationText,
-    formatRubroPresupuestal
+    formatRubroPresupuestal,
+    formatFullContractNumber,
+    isSecretariaTicContract
 };
 
 

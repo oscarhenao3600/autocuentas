@@ -9,7 +9,7 @@ const { extractSecuritySocialData, improveEvidenceText, generateObligationAnnexD
 const annexService = require('../services/annex.service');
 const storageService = require('../services/storage.service');
 const nextcloudService = require('../services/nextcloud.service');
-const { calculateSocialSecurity, formatRubroPresupuestal } = require('../utils/period.utils');
+const { calculateSocialSecurity, formatRubroPresupuestal, formatFullContractNumber } = require('../utils/period.utils');
 const { getFormatNameForDependency } = require('../utils/secretariasDictionary');
 
 // ──────────────────────────────────────────────────────────────
@@ -509,6 +509,8 @@ const generateBillingPackage = async (periodId, userId, options = {}) => {
             }
         }
 
+        const fullContractNumber = formatFullContractNumber(contract.contractNumber, contract.internalContractNumber);
+
         const commonData = {
             // ── NUEVAS VARIABLES (snake_case) para CERTIFICADO DEL SUPERVISOR ──
             fecha_certificado:                 fechaCorteSign,
@@ -517,7 +519,7 @@ const generateBillingPackage = async (periodId, userId, options = {}) => {
             nombre_contratista:                contract.contractorName || user.fullName || '',
             identificacion_contratista:        contract.idNumber || '',
             tipo_contrato:                     contract.contractType || 'PRESTACIÓN DE SERVICIOS DE APOYO A LA GESTION',
-            numero_contrato:                   contract.contractNumber || '',
+            numero_contrato:                   fullContractNumber || '',
             fecha_acta_inicio:                 contract.startDate ? formatDateEs(contract.startDate) : '',
             fecha_terminacion:                 (periodIsAddition && contract.additionEndDate) ? formatDateEs(contract.additionEndDate) : (effectiveEndDate ? formatDateEs(effectiveEndDate) : ''),
             cdp:                               periodIsAddition ? (contract.additionCdp || contract.cdp || '') : (contract.cdp || ''),
@@ -599,7 +601,7 @@ const generateBillingPackage = async (periodId, userId, options = {}) => {
             ciudad_fecha_estampillas:          `${contract.idCity || 'Armenia'} Quindío, ${mes.toLowerCase()} de ${anio}`,
             cedula_expedicion_larga:           `${contract.idNumber || ''} de ${contract.idCity || 'Armenia'}- Quindío`,
             direccion_telefono_contratista:    `${contract.contractorAddress || ''} ${contract.idCity || 'Armenia'} -Quindío Teléfono: ${contract.contractorPhone || ''}`,
-            especificar_contrato_estampillas:  `${(contract.contractType || 'PRESTACIÓN DE SERVICIOS DE APOYO A LA GESTION').toUpperCase()}   ${contract.contractNumber || ''}`,
+            especificar_contrato_estampillas:  `${(contract.contractType || 'PRESTACIÓN DE SERVICIOS DE APOYO A LA GESTION').toUpperCase()}   ${fullContractNumber || ''}`,
             ciudad_fecha:                      `${contract.idCity || 'Armenia'} Quindío, ${mes.toLowerCase()} de ${anio}`,
             direccion_contratista:             contract.contractorAddress || '',
             telefono_contratista:              contract.contractorPhone || '',
@@ -634,7 +636,7 @@ const generateBillingPackage = async (periodId, userId, options = {}) => {
             // ── VARIABLES LEGACY (camelCase) para compatibilidad con INFORME DE ACTIVIDADES ──
             contractorName:   contract.contractorName    || user.fullName || '',
             idNumber:         contract.idNumber           || '',
-            contractNumber:   contract.contractNumber     || '',
+            contractNumber:   fullContractNumber          || '',
             contractType:     contract.contractType       || '',
             contractObject:   contract.contractObject     || '',
             supervisorName:   contract.supervisorName     || '',

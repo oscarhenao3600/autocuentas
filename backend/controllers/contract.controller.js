@@ -10,9 +10,10 @@ const {
     extractBankCertificateData, 
     extractActaInicioData, 
     extractRutData, 
-    extractSecuritySocialData 
+    extractSecuritySocialData,
+    extractConfidentialityData
 } = require('../services/gemini.service');
-const { filterSpecificObligations, determineActiveAct, formatRubroPresupuestal } = require('../utils/period.utils');
+const { filterSpecificObligations, determineActiveAct, formatRubroPresupuestal, formatFullContractNumber, isSecretariaTicContract } = require('../utils/period.utils');
 const { formatDependenciaWithCode } = require('../utils/secretariasDictionary');
 const { checkContractEvidenceStatus } = require('../services/reminder.service');
 
@@ -553,7 +554,7 @@ exports.updateContract = async (req, res) => {
 
         const allowedFields = [
             'entityName', 'contractAlias', 'status',
-            'contractorName', 'idNumber', 'contractType', 'contractNumber',
+            'contractorName', 'idNumber', 'contractType', 'contractNumber', 'internalContractNumber',
             'startDate', 'endDate', 'cdp', 'rp', 'rubro', 'totalValue',
             'paymentValue', 'bankName', 'accountNumber', 'paymentMethod',
             'monthlyValue', 'contractObject', 'activities', 'supervisorName', 'supervisorDependency',
@@ -564,7 +565,7 @@ exports.updateContract = async (req, res) => {
             'additionCdp', 'additionRp', 'additionRubro', 'additionDuration',
             'executionTerm', 'paymentTerms', 'unidadEjecutora', 'unidadEjecutoraCodigo', 'unidadContratacion',
             'fuenteFinanciacion', 'fuenteCodigo',
-            'customDeliveryDate', 'deliveryNotes'
+            'customDeliveryDate', 'deliveryNotes', 'confidentialityDocPath'
         ];
 
         allowedFields.forEach(field => {
@@ -811,3 +812,53 @@ exports.getEvidenceReminderStatus = async (req, res) => {
         res.status(500).json({ message: 'Error al verificar recordatorios', error: error.message });
     }
 };
+
+exports.uploadConfidentialityDoc = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Por favor suba el documento de Compromiso / Acuerdo de Confidencialidad (PDF o Imagen)' });
+        }
+
+        const contractId = req.body.contractId || req.query.contractId;
+        let contract = await resolveContract(req.user._id, contractId);
+        if (!contract) {
+            return res.status(400).json({ message: 'Primero debe configurar el contrato antes de cargar el documento de confidencialidad' });
+        }
+
+        const user = await User.findById(req.user._id);
+        const folder = getContractorFolder(contract, user);
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+
+        const uploaded = await storageService.saveFile({
+            buffer: fileBuffer,
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype,
+            pathSegments: ['Contratistas', folder, 'Anexos']
+        });
+        contract.confidentialityDocPath = uploaded.path;
+
+        // Extraer número de contrato interno con IA
+        const extracted = await extractConfidentialityData(fileBuffer, {
+            filename: req.file.originalname,
+            mimetype: req.file.mimetype
+        });
+
+        if (extracted && extracted.internalContractNumber) {
+            contract.internalContractNumber = extracted.internalContractNumber;
+        }
+
+        await contract.save();
+
+        const fullNum = formatFullContractNumber(contract.contractNumber, contract.internalContractNumber);
+
+        res.json({
+            message: `Documento de confidencialidad procesado con éxito.${extracted && extracted.internalContractNumber ? ` Número de contrato interno identificado: ${extracted.internalContractNumber}. Se plasmará como: ${fullNum}` : ''}`,
+            extracted,
+            data: contract
+        });
+    } catch (error) {
+        console.error('Error uploadConfidentialityDoc:', error);
+        res.status(500).json({ message: 'Error al procesar el documento de confidencialidad', error: error.message });
+    }
+};
+

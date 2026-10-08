@@ -13,7 +13,8 @@ const {
     getEvidenceReminderStatus,
     unlockBankCertificate,
     unlockRut,
-    unlockSecuritySocial
+    unlockSecuritySocial,
+    uploadConfidentialityDoc
 } = require('../controllers/contract.controller');
 const { protect } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
@@ -53,6 +54,9 @@ router.post('/upload-addition', protect, upload.single('additionFile'), uploadAd
 
 // Upload and process Registro Presupuestal (RP) de la adición
 router.post('/upload-addition-rp', protect, upload.single('additionRpFile'), uploadAdditionRp);
+
+// Upload and process Compromiso / Acuerdo de Confidencialidad (PDF/Imagen) with Gemini AI
+router.post('/upload-confidentiality', protect, upload.single('confidentialityFile'), uploadConfidentialityDoc);
 
 module.exports = router;
 

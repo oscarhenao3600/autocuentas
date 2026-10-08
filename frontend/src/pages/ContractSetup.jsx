@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
-import { filterSpecificObligations, getContractDurationText, formatRubroPresupuestal } from '../utils/period.utils';
+import { filterSpecificObligations, getContractDurationText, formatRubroPresupuestal, formatFullContractNumber, isSecretariaTicContract } from '../utils/period.utils';
 import { getSecretarias, resolveSecretaria } from '../utils/secretariasDictionary';
 import { motion } from 'framer-motion';
 import { FileUp, Save, CheckCircle, AlertCircle, Loader2, FileText, Info, ArrowLeft, Plus, Trash2, Lock, Eye, EyeOff, X } from 'lucide-react';
@@ -14,6 +14,7 @@ const ContractSetup = () => {
     const [uploadingAddRp, setUploadingAddRp] = useState(false);
     const [uploadingActa, setUploadingActa] = useState(false);
     const [uploadingRp, setUploadingRp] = useState(false);
+    const [uploadingConfidentiality, setUploadingConfidentiality] = useState(false);
     const [contract, setContract] = useState(null);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
@@ -165,6 +166,32 @@ const ContractSetup = () => {
             setError('Error al procesar el RP: ' + (err.response?.data?.message || err.message));
         } finally {
             setUploadingRp(false);
+        }
+    };
+
+    const handleConfidentialityUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('confidentialityFile', file);
+        if (contract?._id) {
+            formData.append('contractId', contract._id);
+        }
+
+        setUploadingConfidentiality(true);
+        setError('');
+        setSuccess('');
+        try {
+            const { data } = await api.post('/contracts/upload-confidentiality', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            setContract(data.data);
+            setSuccess(data.message || 'Acuerdo de Confidencialidad procesado con éxito por la IA.');
+        } catch (err) {
+            setError('Error al procesar confidencialidad: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setUploadingConfidentiality(false);
         }
     };
 
@@ -353,9 +380,38 @@ const ContractSetup = () => {
                                     <input className="input" value={contract.contractType || ''} onChange={(e) => setContract({...contract, contractType: e.target.value})} placeholder="Ej: Prestación de Servicios" />
                                 </div>
                                 <div className="form-group">
-                                    <label className="label">Número de Contrato</label>
-                                    <input className="input" value={contract.contractNumber || ''} onChange={(e) => setContract({...contract, contractNumber: e.target.value})} />
+                                    <label className="label">Número de Contrato (SECOP II)</label>
+                                    <input 
+                                        className="input" 
+                                        value={contract.contractNumber || ''} 
+                                        onChange={(e) => setContract({...contract, contractNumber: e.target.value})} 
+                                        placeholder="Ej: CO1.PCCNTR.9868346" 
+                                    />
                                 </div>
+                                <div className="form-group">
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <label className="label" style={{ margin: 0 }}>Número de Contrato Interno</label>
+                                        {isSecretariaTicContract(contract) && (
+                                            <span style={{ fontSize: '0.72rem', color: 'var(--primary)', fontWeight: 600 }}>
+                                                Requerido en Secretaría TIC
+                                            </span>
+                                        )}
+                                    </div>
+                                    <input 
+                                        className="input" 
+                                        value={contract.internalContractNumber || ''} 
+                                        onChange={(e) => setContract({...contract, internalContractNumber: e.target.value})} 
+                                        placeholder="Ej: TIC-CD-2026-092" 
+                                    />
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                        SECOP II → Mis contratos → Punto 5 documentos → confidencialidad.pdf (Cláusula 4ta)
+                                    </span>
+                                </div>
+                                {(contract.contractNumber || contract.internalContractNumber) && (
+                                    <div style={{ gridColumn: '1 / -1', marginTop: '-0.35rem', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                        💡 Se plasmará en todos los formatos oficiales como: <strong style={{ color: 'var(--text-main)' }}>{formatFullContractNumber(contract.contractNumber, contract.internalContractNumber)}</strong>
+                                    </div>
+                                )}
                                 <div className="form-group">
                                     <label className="label">Fecha Inicio Contrato</label>
                                     <input className="input" type="date" value={contract.startDate ? contract.startDate.split('T')[0] : ''} onChange={(e) => setContract({...contract, startDate: e.target.value})} />
@@ -754,6 +810,32 @@ const ContractSetup = () => {
                                 <FileText size={18} color="var(--primary)" />
                                 Documentos Contractuales y Anexos
                             </h3>
+                            {isSecretariaTicContract(contract) && (
+                                <div style={{
+                                    padding: '0.85rem 1rem',
+                                    marginBottom: '1rem',
+                                    borderRadius: 'var(--radius-md)',
+                                    background: 'rgba(59, 130, 246, 0.08)',
+                                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                                    display: 'flex',
+                                    alignItems: 'flex-start',
+                                    gap: '0.75rem',
+                                    fontSize: '0.85rem',
+                                    lineHeight: '1.4'
+                                }}>
+                                    <span style={{ fontSize: '1.25rem', lineHeight: 1 }}>🏛️</span>
+                                    <div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                                            <strong style={{ color: 'var(--text-main)' }}>Secretaría TIC - Alcaldía de Armenia detectada</strong>
+                                            <span style={{ fontSize: '0.7rem', background: 'var(--primary)', color: '#fff', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>Requerido</span>
+                                        </div>
+                                        <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+                                            En esta secretaría se solicita referenciar el <strong>Número de Contrato Interno</strong> (ej: <code>TIC-CD-2026-092</code>) en todos los formatos oficiales concatenado con el número de SECOP II.
+                                            Puedes subir el archivo <strong>confidencialidad.pdf</strong> (SECOP II &rarr; Mis contratos &rarr; Punto 5 &rarr; debajo de la minuta) para extraerlo automáticamente de la <strong>Cláusula Cuarta</strong>, o digitarlo manualmente en el formulario.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                                 {/* Acta de Inicio / SECOP II */}
                                 <div style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', textAlign: 'center', background: 'rgba(255,255,255,0.02)' }}>
@@ -899,6 +981,31 @@ const ContractSetup = () => {
                                             </button>
                                         )}
                                     </div>
+                                </div>
+
+                                {/* Acuerdo de Confidencialidad */}
+                                <div style={{ 
+                                    padding: '1rem', 
+                                    border: isSecretariaTicContract(contract) && !contract.internalContractNumber ? '1px dashed var(--primary)' : '1px solid var(--border)', 
+                                    borderRadius: 'var(--radius-md)', 
+                                    textAlign: 'center',
+                                    background: isSecretariaTicContract(contract) ? 'rgba(59, 130, 246, 0.03)' : 'rgba(255,255,255,0.02)'
+                                }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginBottom: '0.25rem' }}>
+                                        <p style={{ fontSize: '0.875rem', fontWeight: '600', margin: 0 }}>Acuerdo Confidencialidad</p>
+                                        {isSecretariaTicContract(contract) && (
+                                            <span style={{ fontSize: '0.65rem', background: 'var(--primary)', color: '#fff', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>TIC</span>
+                                        )}
+                                    </div>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                        {contract.internalContractNumber 
+                                            ? `Contrato Interno: ${contract.internalContractNumber}` 
+                                            : 'Extrae contrato interno (Cláusula 4ta)'}
+                                    </p>
+                                    <label className="btn" style={{ fontSize: '0.75rem', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', display: 'inline-block', opacity: uploadingConfidentiality ? 0.7 : 1 }}>
+                                        {uploadingConfidentiality ? '⏳ Procesando...' : contract.confidentialityDocPath ? <><CheckCircle size={14} style={{display:'inline', marginRight:'4px'}}/> Actualizar</> : 'Subir confidencialidad.pdf'}
+                                        <input type="file" style={{ display: 'none' }} onChange={handleConfidentialityUpload} accept=".pdf,.jpg,.jpeg,.png" disabled={uploadingConfidentiality} />
+                                    </label>
                                 </div>
                             </div>
                         </div>
