@@ -215,7 +215,7 @@ const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard, uiMo
 /**
  * Sends a binary document/archive by Telegram
  */
-const sendTelegramDocument = async (chatId, filePath, caption) => {
+const sendTelegramDocument = async (chatId, filePath, caption, customFilename = null) => {
     if (!TELEGRAM_TOKEN || !filePath) return;
     try {
         const fileBuffer = await storageService.getFileBuffer(filePath);
@@ -224,7 +224,7 @@ const sendTelegramDocument = async (chatId, filePath, caption) => {
             return;
         }
 
-        let filename = path.basename(filePath.replace(/\\/g, '/')) || 'documento.bin';
+        let filename = customFilename || path.basename(filePath.replace(/\\/g, '/')) || 'documento.bin';
         if (filename.length > 100) filename = 'documento.bin';
 
         const boundary = '----TelegramBotBoundary' + Date.now().toString(16);
@@ -2421,7 +2421,24 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 
 /**
- * Displays the Terms and Conditions notice with Google Drive link before contractor registration
+ * Resolves the path to the official Terms and Conditions PDF document
+ */
+const resolveTermsPdfPath = () => {
+    const localCandidates = [
+        path.join(__dirname, '..', 'templates', 'Terminos-Condiciones-Autocuentas.pdf'),
+        path.join(__dirname, '..', 'uploads', 'Terminos-Condiciones-Autocuentas.pdf'),
+        path.resolve('templates/Terminos-Condiciones-Autocuentas.pdf'),
+        path.resolve('uploads/Terminos-Condiciones-Autocuentas.pdf')
+    ];
+    for (const p of localCandidates) {
+        if (fs.existsSync(p)) return p;
+    }
+    // Direct Google Drive file ID (downloads single file buffer, does NOT expose folder)
+    return '18d0e_EDZs1Z_f7HfL259yH6cIUycGqeC';
+};
+
+/**
+ * Sends the official Terms and Conditions PDF directly into the chat and displays the acceptance prompt
  */
 const showTermsAndConditionsPrompt = async (chatId, cedula, messageId = null) => {
     sessions.set(chatId, {
@@ -2429,34 +2446,43 @@ const showTermsAndConditionsPrompt = async (chatId, cedula, messageId = null) =>
         tempCedula: cedula
     });
 
-    const termsFolderUrl = 'https://drive.google.com/drive/u/0/folders/14Jc9G7573rYuj5v6-Yo3wsvCPU4iU4g-';
-    const termsDocName = 'Terminos-Condiciones-Autocuentas';
+    const termsPdfPath = resolveTermsPdfPath();
+    const termsDocName = 'Terminos-Condiciones-Autocuentas.pdf';
 
+    if (messageId) {
+        await editTelegramMessage(chatId, messageId, '⏳ Enviando documento oficial de Términos y Condiciones a tu chat...');
+    }
+
+    // 1. Send the PDF file directly to the contractor's chat so they can read and view it locally
+    try {
+        await sendTelegramDocument(
+            chatId,
+            termsPdfPath,
+            `📄 Documento Oficial: ${termsDocName}`,
+            termsDocName
+        );
+    } catch (docErr) {
+        console.error('Error enviando PDF de términos por Telegram:', docErr);
+    }
+
+    // 2. Display the formal terms and conditions and Habeas Data acceptance message
     let termsMsg = `📋 *TÉRMINOS Y CONDICIONES DEL SERVICIO*\n\n`;
     termsMsg += `Estimado(a) contratista, estás a punto de iniciar tu registro en *Autocuentas*`;
     if (cedula) termsMsg += ` con el documento de identidad *${cedula}*`;
     termsMsg += `.\n\n`;
-    termsMsg += `Antes de ingresar tus datos personales y contractuales, te invitamos a consultar y leer detalladamente el documento oficial de Términos y Condiciones y Política de Tratamiento de Datos Personales (Habeas Data):\n\n`;
-    termsMsg += `📄 *Documento Oficial:* ${termsDocName}\n`;
-    termsMsg += `🔗 *Enlace de consulta:* [Ver Términos en Google Drive](${termsFolderUrl})\n\n`;
-    termsMsg += `📌 *Enlace web directo:*\n${termsFolderUrl}\n\n`;
-    termsMsg += `⚠️ *Aviso Legal e Institucional:*\n`;
+    termsMsg += `Te hemos enviado el documento PDF oficial *${termsDocName}* directamente aquí en el chat para que lo leas y visualices con total seguridad en tu dispositivo móvil o computador sin necesidad de ingresar a enlaces externos ni carpetas compartidas.\n\n`;
+    termsMsg += `⚠️ *Aviso Legal e Institucional (Habeas Data):*\n`;
     termsMsg += `Al presionar *"✅ Acepto los Términos y Continuar"*, declaras de manera voluntaria, previa e informada que:\n`;
-    termsMsg += `1️⃣ Has tenido acceso al documento oficial *${termsDocName}* y aceptas sus condiciones.\n`;
+    termsMsg += `1️⃣ Has recibido y tenido acceso completo al documento oficial *${termsDocName}* y aceptas sus condiciones.\n`;
     termsMsg += `2️⃣ Autorizas el tratamiento de tus datos personales e información contractual (Ley 1581 de 2012) exclusivamente para la gestión de tus contratos y la generación de tus informes y cuentas de cobro.\n\n`;
     termsMsg += `¿Aceptas los términos y condiciones para continuar con tu registro?`;
 
     const keyboard = [
         [{ text: '✅ Acepto los Términos y Continuar', callback_data: 'accept_terms_and_continue' }],
-        [{ text: '📄 Abrir Términos en Navegador', url: termsFolderUrl }],
         [{ text: '❌ No Acepto / Cancelar', callback_data: 'cancel_registration' }]
     ];
 
-    if (messageId) {
-        await editTelegramMessage(chatId, messageId, termsMsg, keyboard);
-    } else {
-        await sendTelegramKeyboardMessage(chatId, termsMsg, keyboard);
-    }
+    await sendTelegramKeyboardMessage(chatId, termsMsg, keyboard);
 };
 
     // Public / Registration callbacks (no existing user required)
@@ -3720,10 +3746,8 @@ const handleIncomingMessage = async (message) => {
                 await sendTelegramMessage(chatId, '❌ Registro cancelado. Al no aceptar los Términos y Condiciones, no es posible registrar tu usuario en el sistema. Escribe /start si deseas volver a empezar.');
                 return;
             } else {
-                const termsFolderUrl = 'https://drive.google.com/drive/u/0/folders/14Jc9G7573rYuj5v6-Yo3wsvCPU4iU4g-';
-                await sendTelegramKeyboardMessage(chatId, `⚠️ Para continuar con tu registro es necesario aceptar los Términos y Condiciones. Puedes consultarlos o pulsar el botón abajo:`, [
+                await sendTelegramKeyboardMessage(chatId, `⚠️ Para continuar con tu registro es necesario aceptar los Términos y Condiciones. Puedes leer el documento PDF ("Terminos-Condiciones-Autocuentas.pdf") enviado arriba en este chat o presionar una opción:`, [
                     [{ text: '✅ Acepto los Términos y Continuar', callback_data: 'accept_terms_and_continue' }],
-                    [{ text: '📄 Abrir Términos en Navegador', url: termsFolderUrl }],
                     [{ text: '❌ Cancelar', callback_data: 'cancel_registration' }]
                 ]);
                 return;
