@@ -56,6 +56,14 @@ exports.login = async (req, res) => {
 
         const user = await User.findOne({ email });
         if (user && (await user.comparePassword(password))) {
+            if (user.status === 'inactive' || user.isActive === false) {
+                const audit = user.deletionAudit || {};
+                const dateStr = audit.deletedAt ? new Date(audit.deletedAt).toLocaleDateString('es-CO') : '';
+                return res.status(403).json({
+                    message: `Esta cuenta fue dada de baja y sus documentos purgados${dateStr ? ` el ${dateStr}` : ''}. Motivo de auditoría: "${audit.reason || 'Solicitud de eliminación de datos'}". Contacte al Administrador.`
+                });
+            }
+
             res.json({
                 _id: user._id,
                 fullName: user.fullName,

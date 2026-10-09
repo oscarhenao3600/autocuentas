@@ -25,7 +25,9 @@ import {
     Plus,
     Lock,
     Unlock,
-    Check
+    Check,
+    AlertTriangle,
+    RotateCcw
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -38,6 +40,7 @@ const ContractorsList = () => {
     const [filterOption, setFilterOption] = useState('all'); // all | exempt | with_cedula | without_contract | telegram
     const [selectedContractor, setSelectedContractor] = useState(null);
     const [userToDelete, setUserToDelete] = useState(null);
+    const [deletionReason, setDeletionReason] = useState('');
     const [deleting, setDeleting] = useState(false);
     const [feedback, setFeedback] = useState(null);
 
@@ -270,14 +273,35 @@ const ContractorsList = () => {
     const handleDeleteClick = (c, e) => {
         if (e) e.stopPropagation();
         setUserToDelete(c);
+        if (c.deletionRequest && c.deletionRequest.reason) {
+            setDeletionReason(c.deletionRequest.reason);
+        } else {
+            setDeletionReason('Solicitud de eliminación de datos personales y purga de documentos');
+        }
+    };
+
+    const handleReactivateUser = async (c, e) => {
+        if (e) e.stopPropagation();
+        try {
+            const { data } = await api.patch(`/admin/users/${c._id}/reactivate`);
+            setFeedback({ type: 'success', message: data.message || 'Contratista reactivado con éxito' });
+            await fetchContractors();
+            if (selectedContractor && selectedContractor._id === c._id) {
+                setSelectedContractor(prev => ({ ...prev, status: 'active', isActive: true }));
+            }
+        } catch (error) {
+            setFeedback({ type: 'error', message: error.response?.data?.message || 'Error al reactivar contratista' });
+        }
     };
 
     const confirmDeleteUser = async () => {
         if (!userToDelete) return;
         setDeleting(true);
         try {
-            const { data } = await api.delete(`/admin/users/${userToDelete._id}`);
-            setFeedback({ type: 'success', message: data.message || 'Usuario eliminado con éxito' });
+            const { data } = await api.delete(`/admin/users/${userToDelete._id}`, {
+                data: { reason: deletionReason }
+            });
+            setFeedback({ type: 'success', message: data.message || 'Usuario inactivado y documentos purgados con éxito' });
             setUserToDelete(null);
             if (selectedContractor && selectedContractor._id === userToDelete._id) {
                 setSelectedContractor(null);
@@ -308,6 +332,8 @@ const ContractorsList = () => {
 
         if (!matchesSearch) return false;
 
+        if (filterOption === 'deletion_request') return Boolean(c.deletionRequest?.requested);
+        if (filterOption === 'inactive') return c.status === 'inactive';
         if (filterOption === 'exempt') return Boolean(c.isPaymentExempt);
         if (filterOption === 'with_cedula') return c.hasContract && c.cedula && !c.cedula.includes('Sin');
         if (filterOption === 'without_contract') return !c.hasContract;
@@ -318,6 +344,8 @@ const ContractorsList = () => {
     // KPI stats (excluding admin)
     const nonAdminContractors = contractors.filter(c => c.role !== 'admin' && c._id !== currentUser?._id);
     const totalCount = nonAdminContractors.length;
+    const deletionRequestsCount = nonAdminContractors.filter(c => c.deletionRequest?.requested).length;
+    const inactiveCount = nonAdminContractors.filter(c => c.status === 'inactive').length;
     const exemptCount = nonAdminContractors.filter(c => c.isPaymentExempt).length;
     const withCedulaCount = nonAdminContractors.filter(c => c.hasContract && c.cedula && !c.cedula.includes('Sin')).length;
     const telegramCount = nonAdminContractors.filter(c => c.telegramLinked).length;
@@ -557,6 +585,43 @@ const ContractorsList = () => {
                         >
                             Telegram ({telegramCount})
                         </button>
+                        {deletionRequestsCount > 0 && (
+                            <button 
+                                onClick={() => setFilterOption('deletion_request')}
+                                className="btn"
+                                style={{ 
+                                    padding: '0.4rem 0.85rem', 
+                                    fontSize: '0.8rem', 
+                                    background: filterOption === 'deletion_request' ? '#ef4444' : 'rgba(239, 68, 68, 0.15)',
+                                    color: filterOption === 'deletion_request' ? 'white' : '#ef4444',
+                                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                                    fontWeight: 600,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem'
+                                }}
+                            >
+                                <AlertTriangle size={13} /> Solicitud Eliminación ({deletionRequestsCount})
+                            </button>
+                        )}
+                        {inactiveCount > 0 && (
+                            <button 
+                                onClick={() => setFilterOption('inactive')}
+                                className="btn"
+                                style={{ 
+                                    padding: '0.4rem 0.85rem', 
+                                    fontSize: '0.8rem', 
+                                    background: filterOption === 'inactive' ? '#4b5563' : 'rgba(255,255,255,0.05)',
+                                    color: filterOption === 'inactive' ? 'white' : 'var(--text-muted)',
+                                    border: '1px solid var(--border)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem'
+                                }}
+                            >
+                                <span>🚫 Inactivos ({inactiveCount})</span>
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -620,6 +685,38 @@ const ContractorsList = () => {
                                                 <td style={{ padding: '1rem' }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                                                         <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>{c.contractorName || c.fullName}</span>
+                                                        {c.status === 'inactive' && (
+                                                            <span style={{
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                gap: '0.25rem',
+                                                                fontSize: '0.7rem',
+                                                                fontWeight: 700,
+                                                                color: '#ef4444',
+                                                                background: 'rgba(239, 68, 68, 0.12)',
+                                                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                                                padding: '0.15rem 0.45rem',
+                                                                borderRadius: '12px'
+                                                            }}>
+                                                                🚫 Inactivo
+                                                            </span>
+                                                        )}
+                                                        {c.deletionRequest?.requested && (
+                                                            <span style={{
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                gap: '0.25rem',
+                                                                fontSize: '0.7rem',
+                                                                fontWeight: 700,
+                                                                color: '#f59e0b',
+                                                                background: 'rgba(245, 158, 11, 0.15)',
+                                                                border: '1px solid rgba(245, 158, 11, 0.35)',
+                                                                padding: '0.15rem 0.45rem',
+                                                                borderRadius: '12px'
+                                                            }} title={`Solicitud de baja: ${c.deletionRequest.reason}`}>
+                                                                <AlertTriangle size={11} /> Solicitud Baja
+                                                            </span>
+                                                        )}
                                                         {c.isPaymentExempt && (
                                                             <span style={{
                                                                 display: 'inline-flex',
@@ -744,25 +841,68 @@ const ContractorsList = () => {
                                                             >
                                                                 <Layers size={13} /> Archivos
                                                             </button>
-                                                        <button 
-                                                            onClick={(e) => handleDeleteClick(c, e)}
-                                                            className="btn"
-                                                            title="Eliminar usuario del sistema"
-                                                            style={{ 
-                                                                padding: '0.35rem 0.65rem', 
-                                                                fontSize: '0.78rem', 
-                                                                display: 'inline-flex', 
-                                                                alignItems: 'center', 
-                                                                gap: '0.3rem',
-                                                                background: 'rgba(239, 68, 68, 0.1)',
-                                                                color: 'var(--error)',
-                                                                border: '1px solid rgba(239, 68, 68, 0.25)',
-                                                                borderRadius: 'var(--radius-md)',
-                                                                cursor: 'pointer'
-                                                            }}
-                                                        >
-                                                            <Trash2 size={13} /> Eliminar
-                                                        </button>
+                                                        {c.status === 'inactive' ? (
+                                                            <button 
+                                                                onClick={(e) => handleReactivateUser(c, e)}
+                                                                className="btn"
+                                                                title="Reactivar contratista en el sistema"
+                                                                style={{ 
+                                                                    padding: '0.35rem 0.65rem', 
+                                                                    fontSize: '0.78rem', 
+                                                                    display: 'inline-flex', 
+                                                                    alignItems: 'center', 
+                                                                    gap: '0.3rem',
+                                                                    background: 'rgba(16, 185, 129, 0.12)',
+                                                                    color: 'var(--success)',
+                                                                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                                                                    borderRadius: 'var(--radius-md)',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                            >
+                                                                <RotateCcw size={13} /> Reactivar
+                                                            </button>
+                                                        ) : c.deletionRequest?.requested ? (
+                                                            <button 
+                                                                onClick={(e) => handleDeleteClick(c, e)}
+                                                                className="btn"
+                                                                title="Atender solicitud de eliminación y purga de datos"
+                                                                style={{ 
+                                                                    padding: '0.35rem 0.65rem', 
+                                                                    fontSize: '0.78rem', 
+                                                                    display: 'inline-flex', 
+                                                                    alignItems: 'center', 
+                                                                    gap: '0.3rem',
+                                                                    background: '#ef4444',
+                                                                    color: 'white',
+                                                                    border: '1px solid rgba(239, 68, 68, 0.8)',
+                                                                    borderRadius: 'var(--radius-md)',
+                                                                    cursor: 'pointer',
+                                                                    fontWeight: 600
+                                                                }}
+                                                            >
+                                                                <Trash2 size={13} /> Atender Solicitud
+                                                            </button>
+                                                        ) : (
+                                                            <button 
+                                                                onClick={(e) => handleDeleteClick(c, e)}
+                                                                className="btn"
+                                                                title="Eliminar usuario del sistema"
+                                                                style={{ 
+                                                                    padding: '0.35rem 0.65rem', 
+                                                                    fontSize: '0.78rem', 
+                                                                    display: 'inline-flex', 
+                                                                    alignItems: 'center', 
+                                                                    gap: '0.3rem',
+                                                                    background: 'rgba(239, 68, 68, 0.1)',
+                                                                    color: 'var(--error)',
+                                                                    border: '1px solid rgba(239, 68, 68, 0.25)',
+                                                                    borderRadius: 'var(--radius-md)',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                            >
+                                                                <Trash2 size={13} /> Eliminar
+                                                            </button>
+                                                        )}
                                                     </div>
                                                 </td>
                                             </tr>
@@ -847,6 +987,105 @@ const ContractorsList = () => {
                                         <X size={20} />
                                     </button>
                                 </div>
+
+                                {/* Banner de Solicitud de Eliminación (Habeas Data) */}
+                                {selectedContractor.deletionRequest?.requested && (
+                                    <div style={{
+                                        background: 'rgba(245, 158, 11, 0.08)',
+                                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                                        borderRadius: 'var(--radius-md)',
+                                        padding: '1rem',
+                                        marginBottom: '1.5rem'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#f59e0b', fontWeight: 700, fontSize: '0.9rem' }}>
+                                                <AlertTriangle size={18} />
+                                                <span>Solicitud de Eliminación de Datos Activa (Habeas Data)</span>
+                                            </div>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                                Solicitado el: {selectedContractor.deletionRequest.requestedAt ? new Date(selectedContractor.deletionRequest.requestedAt).toLocaleString('es-CO') : 'Reciente'}
+                                            </span>
+                                        </div>
+                                        <div style={{ background: 'rgba(0,0,0,0.25)', padding: '0.75rem', borderRadius: '4px', fontSize: '0.85rem', fontStyle: 'italic', color: 'var(--text-main)', marginBottom: '0.75rem', borderLeft: '3px solid #f59e0b' }}>
+                                            "{selectedContractor.deletionRequest.reason}"
+                                        </div>
+                                        {selectedContractor.deletionRequest.contactPhone && (
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                                📞 Teléfono indicado para contacto: <strong>{selectedContractor.deletionRequest.contactPhone}</strong>
+                                            </div>
+                                        )}
+                                        <button
+                                            onClick={() => {
+                                                const toDelete = selectedContractor;
+                                                setSelectedContractor(null);
+                                                handleDeleteClick(toDelete);
+                                            }}
+                                            className="btn"
+                                            style={{
+                                                background: '#ef4444',
+                                                color: 'white',
+                                                border: 'none',
+                                                padding: '0.45rem 1rem',
+                                                fontSize: '0.8rem',
+                                                fontWeight: 600,
+                                                borderRadius: 'var(--radius-md)',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            <Trash2 size={14} /> Atender Solicitud y Purgar Datos
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Banner de Usuario Inactivado / Auditoría de Purga */}
+                                {selectedContractor.status === 'inactive' && (
+                                    <div style={{
+                                        background: 'rgba(239, 68, 68, 0.08)',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                                        borderRadius: 'var(--radius-md)',
+                                        padding: '1rem',
+                                        marginBottom: '1.5rem'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--error)', fontWeight: 700, fontSize: '0.9rem' }}>
+                                                <Shield size={18} />
+                                                <span>Contratista Inactivado - Datos Purgados (Registro de Auditoría)</span>
+                                            </div>
+                                            {selectedContractor.deletionAudit?.deletedAt && (
+                                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                                    Baja efectuada: {new Date(selectedContractor.deletionAudit.deletedAt).toLocaleString('es-CO')}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div style={{ fontSize: '0.825rem', color: 'var(--text-main)', lineHeight: 1.5, marginBottom: '0.75rem' }}>
+                                            <div><strong>Administrador responsable:</strong> {selectedContractor.deletionAudit?.deletedByName || 'Administración'}</div>
+                                            <div><strong>Archivos purgados de Google Drive/Servidor:</strong> {selectedContractor.deletionAudit?.purgedFilesCount ?? 0} archivos</div>
+                                            <div><strong>Motivo registrado:</strong> {selectedContractor.deletionAudit?.reason || 'Sin motivo registrado'}</div>
+                                        </div>
+                                        <button
+                                            onClick={(e) => handleReactivateUser(selectedContractor, e)}
+                                            className="btn"
+                                            style={{
+                                                background: 'rgba(16, 185, 129, 0.15)',
+                                                color: 'var(--success)',
+                                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                                padding: '0.45rem 1rem',
+                                                fontSize: '0.8rem',
+                                                fontWeight: 600,
+                                                borderRadius: 'var(--radius-md)',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            <RotateCcw size={14} /> Reactivar Contratista en el Sistema
+                                        </button>
+                                    </div>
+                                )}
 
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
                                     <div style={{ background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
@@ -1258,28 +1497,75 @@ const ContractorsList = () => {
                                 </div>
 
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                                    <button 
-                                        className="btn" 
-                                        onClick={() => {
-                                            const toDelete = selectedContractor;
-                                            setSelectedContractor(null);
-                                            handleDeleteClick(toDelete);
-                                        }}
-                                        style={{ 
-                                            background: 'rgba(239, 68, 68, 0.12)', 
-                                            color: 'var(--error)', 
-                                            border: '1px solid rgba(239, 68, 68, 0.3)',
-                                            padding: '0.5rem 1.25rem',
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '0.4rem',
-                                            fontSize: '0.85rem',
-                                            cursor: 'pointer',
-                                            borderRadius: 'var(--radius-md)'
-                                        }}
-                                    >
-                                        <Trash2 size={15} /> Eliminar Usuario del Sistema
-                                    </button>
+                                    {selectedContractor.status === 'inactive' ? (
+                                        <button 
+                                            className="btn" 
+                                            onClick={(e) => {
+                                                handleReactivateUser(selectedContractor, e);
+                                            }}
+                                            style={{ 
+                                                background: 'rgba(16, 185, 129, 0.15)', 
+                                                color: 'var(--success)', 
+                                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                                padding: '0.5rem 1.25rem',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                fontSize: '0.85rem',
+                                                cursor: 'pointer',
+                                                borderRadius: 'var(--radius-md)'
+                                            }}
+                                        >
+                                            <RotateCcw size={15} /> Reactivar Contratista
+                                        </button>
+                                    ) : selectedContractor.deletionRequest?.requested ? (
+                                        <button 
+                                            className="btn" 
+                                            onClick={() => {
+                                                const toDelete = selectedContractor;
+                                                setSelectedContractor(null);
+                                                handleDeleteClick(toDelete);
+                                            }}
+                                            style={{ 
+                                                background: '#ef4444', 
+                                                color: 'white', 
+                                                border: '1px solid rgba(239, 68, 68, 0.8)',
+                                                padding: '0.5rem 1.25rem',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                fontSize: '0.85rem',
+                                                cursor: 'pointer',
+                                                borderRadius: 'var(--radius-md)',
+                                                fontWeight: 600
+                                            }}
+                                        >
+                                            <Trash2 size={15} /> Atender Solicitud y Purgar Datos
+                                        </button>
+                                    ) : (
+                                        <button 
+                                            className="btn" 
+                                            onClick={() => {
+                                                const toDelete = selectedContractor;
+                                                setSelectedContractor(null);
+                                                handleDeleteClick(toDelete);
+                                            }}
+                                            style={{ 
+                                                background: 'rgba(239, 68, 68, 0.12)', 
+                                                color: 'var(--error)', 
+                                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                                padding: '0.5rem 1.25rem',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                fontSize: '0.85rem',
+                                                cursor: 'pointer',
+                                                borderRadius: 'var(--radius-md)'
+                                            }}
+                                        >
+                                            <Trash2 size={15} /> Eliminar / Purgar Contratista
+                                        </button>
+                                    )}
                                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                         <button 
                                             className="btn" 
@@ -1338,12 +1624,11 @@ const ContractorsList = () => {
                                 className="glass"
                                 style={{
                                     width: '100%',
-                                    maxWidth: '480px',
+                                    maxWidth: '560px',
                                     borderRadius: 'var(--radius-lg)',
                                     padding: '2rem',
                                     boxShadow: '0 25px 50px -12px rgba(0,0,0,0.6)',
-                                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                                    textAlign: 'center'
+                                    border: '1px solid rgba(239, 68, 68, 0.4)'
                                 }}
                             >
                                 <div style={{
@@ -1360,19 +1645,76 @@ const ContractorsList = () => {
                                     <Trash2 size={28} />
                                 </div>
 
-                                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: 'var(--text-main)' }}>
-                                    ¿Eliminar Contratista del Sistema?
+                                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: 'var(--text-main)', textAlign: 'center' }}>
+                                    Eliminar Datos y Purgar Documentos
                                 </h3>
 
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
-                                    Estás a punto de eliminar al usuario <strong style={{ color: 'var(--text-main)' }}>{userToDelete.contractorName || userToDelete.fullName}</strong> ({userToDelete.email}).
-                                    <br />
-                                    <span style={{ color: 'var(--error)', fontSize: '0.8rem', display: 'block', marginTop: '0.5rem', fontWeight: 500 }}>
-                                        Esta acción eliminará permanentemente su cuenta, contrato registrado, actas y evidencias. No se puede deshacer.
-                                    </span>
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', lineHeight: 1.5, marginBottom: '1.25rem', textAlign: 'center' }}>
+                                    Estás a punto de dar de baja al contratista <strong style={{ color: 'var(--text-main)' }}>{userToDelete.contractorName || userToDelete.fullName}</strong> ({userToDelete.email}).
                                 </p>
 
-                                <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+                                {/* Razón manifestada por el contratista en Telegram */}
+                                {userToDelete.deletionRequest?.requested && (
+                                    <div style={{
+                                        background: 'rgba(245, 158, 11, 0.1)',
+                                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                                        borderRadius: 'var(--radius-md)',
+                                        padding: '0.85rem 1rem',
+                                        marginBottom: '1.25rem',
+                                        textAlign: 'left'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#f59e0b', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                                            <AlertTriangle size={15} />
+                                            <span>Razón manifestada por el contratista en Telegram:</span>
+                                        </div>
+                                        <div style={{ fontSize: '0.85rem', fontStyle: 'italic', color: 'var(--text-main)', marginBottom: '0.35rem' }}>
+                                            "{userToDelete.deletionRequest.reason}"
+                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            {userToDelete.deletionRequest.contactPhone && `📞 Tel: ${userToDelete.deletionRequest.contactPhone} • `}
+                                            Solicitado el: {userToDelete.deletionRequest.requestedAt ? new Date(userToDelete.deletionRequest.requestedAt).toLocaleString('es-CO') : 'Reciente'}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Campo de Justificación / Auditoría */}
+                                <div style={{ textAlign: 'left', marginBottom: '1.25rem' }}>
+                                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
+                                        Motivo / Justificación de la Eliminación (Registro de Auditoría Habeas Data):
+                                    </label>
+                                    <textarea
+                                        className="input"
+                                        rows={3}
+                                        value={deletionReason}
+                                        onChange={(e) => setDeletionReason(e.target.value)}
+                                        placeholder="Describe las razones acordadas con el contratista para la baja y purga definitiva..."
+                                        style={{ width: '100%', resize: 'vertical', fontSize: '0.85rem', padding: '0.65rem' }}
+                                    />
+                                </div>
+
+                                {/* Checklist de lo que el sistema ejecutará */}
+                                <div style={{
+                                    background: 'rgba(239, 68, 68, 0.06)',
+                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                    borderRadius: 'var(--radius-md)',
+                                    padding: '0.85rem 1rem',
+                                    marginBottom: '1.5rem',
+                                    textAlign: 'left',
+                                    fontSize: '0.78rem',
+                                    color: 'var(--text-muted)',
+                                    lineHeight: 1.5
+                                }}>
+                                    <div style={{ fontWeight: 700, color: 'var(--error)', marginBottom: '0.35rem' }}>
+                                        Acciones que se ejecutarán automáticamente:
+                                    </div>
+                                    <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                                        <li><strong>Purga de almacenamiento:</strong> Eliminación física irreversible de todos los PDFs, actas, contratos, evidencias y recibos en Google Drive y servidor.</li>
+                                        <li><strong>Inactivación en BD:</strong> El usuario quedará con estado <code>inactivo</code> y desvinculado de Telegram.</li>
+                                        <li><strong>Registro de auditoría:</strong> Se conservará el acta digital inmutable con fecha, administrador y motivo para cumplimiento de la Ley 1581 / Habeas Data.</li>
+                                    </ul>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
                                     <button 
                                         className="btn" 
                                         onClick={() => setUserToDelete(null)}
@@ -1392,10 +1734,11 @@ const ContractorsList = () => {
                                             padding: '0.6rem 1.25rem',
                                             display: 'inline-flex',
                                             alignItems: 'center',
-                                            gap: '0.5rem'
+                                            gap: '0.5rem',
+                                            fontWeight: 600
                                         }}
                                     >
-                                        {deleting ? 'Eliminando...' : 'Sí, Eliminar Usuario'}
+                                        {deleting ? 'Purgando e Inactivando...' : 'Confirmar Purga y Baja Definitiva'}
                                     </button>
                                 </div>
                             </motion.div>

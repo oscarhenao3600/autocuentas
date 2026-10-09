@@ -13,6 +13,8 @@ const {
     togglePeriodPayment,
     togglePeriodDiscard,
     deleteUser,
+    reactivateContractor,
+    getAuditLogs,
     getAllDocuments,
     deleteDocument,
     getTelegramPrivileges,
@@ -33,9 +35,11 @@ const upload = require('../middleware/upload.middleware');
 router.get('/users', protect, admin, getRegisteredContractors);
 router.post('/users', protect, admin, createContractor);
 router.patch('/users/:id/toggle-exempt', protect, admin, toggleUserExemption);
+router.patch('/users/:id/reactivate', protect, admin, reactivateContractor);
 router.patch('/periods/:id/toggle-paid', protect, admin, togglePeriodPayment);
 router.patch('/periods/:id/toggle-discard', protect, admin, togglePeriodDiscard);
 router.delete('/users/:id', protect, admin, deleteUser);
+router.get('/audit-logs', protect, admin, getAuditLogs);
 router.patch('/contracts/:id/delivery-date', protect, admin, updateContractDeliveryDate);
 router.get('/documents', protect, admin, getAllDocuments);
 router.delete('/documents', protect, admin, deleteDocument);

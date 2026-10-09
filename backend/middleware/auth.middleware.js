@@ -9,6 +9,9 @@ const protect = async (req, res, next) => {
             token = req.headers.authorization.split(' ')[1];
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             req.user = await User.findById(decoded.id).select('-password');
+            if (req.user && (req.user.status === 'inactive' || req.user.isActive === false)) {
+                return res.status(403).json({ message: 'Usuario inactivado en el sistema por proceso de auditoría y eliminación de datos.' });
+            }
             next();
         } catch (error) {
             res.status(401).json({ message: 'No autorizado, token fallido' });

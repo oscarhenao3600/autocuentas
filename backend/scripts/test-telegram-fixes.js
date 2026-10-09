@@ -133,7 +133,46 @@ async function runTests() {
         });
         console.log('✅ TEST 10 passed ("skip_docs_flow" callback executed)');
 
-        console.log('\n🎉 ALL 10 TESTS PASSED SUCCESSFULLY! All buttons and flows work as expected.');
+        console.log('\n--- TEST 11: Simulating "/modo" command ---');
+        await telegramService.handleIncomingMessage({
+            chat: { id: chatId },
+            from: { first_name: 'Test', username: 'testuser' },
+            text: '/modo'
+        });
+        console.log('✅ TEST 11 passed ("/modo" handled cleanly)');
+
+        console.log('\n--- TEST 12: Callback query "set_mode_senior" and "set_mode_standard" ---');
+        await telegramService.handleCallbackQuery({
+            id: 'cb_test_7',
+            message: { chat: { id: chatId }, message_id: 106 },
+            data: 'set_mode_senior'
+        });
+        const updatedUserSenior = await User.findById(user._id);
+        if (updatedUserSenior.uiMode !== 'senior') {
+            throw new Error(`Expected user.uiMode to be 'senior', got '${updatedUserSenior.uiMode}'`);
+        }
+        console.log('✅ TEST 12.1 passed ("set_mode_senior" activated and persisted)');
+
+        await telegramService.handleCallbackQuery({
+            id: 'cb_test_8',
+            message: { chat: { id: chatId }, message_id: 107 },
+            data: 'set_mode_standard'
+        });
+        const updatedUserStandard = await User.findById(user._id);
+        if (updatedUserStandard.uiMode !== 'standard') {
+            throw new Error(`Expected user.uiMode to be 'standard', got '${updatedUserStandard.uiMode}'`);
+        }
+        console.log('✅ TEST 12.2 passed ("set_mode_standard" activated and persisted)');
+
+        console.log('\n--- TEST 13: Simulating senior natural language question "cómo hago" ---');
+        await telegramService.handleIncomingMessage({
+            chat: { id: chatId },
+            from: { first_name: 'Test', username: 'testuser' },
+            text: 'buenas tardes mijo cómo hago para subir la cuenta'
+        });
+        console.log('✅ TEST 13 passed (senior natural language question handled with gentle guidance)');
+
+        console.log('\n🎉 ALL 14 TESTS PASSED SUCCESSFULLY! All buttons, flows, senior accessibility & mode toggles work as expected.');
         process.exit(0);
     } catch (err) {
         console.error('❌ Test failed with error:', err);

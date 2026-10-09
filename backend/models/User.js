@@ -25,6 +25,11 @@ const userSchema = new mongoose.Schema({
         enum: ['admin', 'client'],
         default: 'client'
     },
+    cedula: {
+        type: String,
+        default: null,
+        trim: true
+    },
     telegramChatId: {
         type: String,
         default: null
@@ -53,6 +58,41 @@ const userSchema = new mongoose.Schema({
     packageAccountsUsed: {
         type: Number,
         default: 0
+    },
+    uiMode: {
+        type: String,
+        enum: ['standard', 'senior'],
+        default: null
+    },
+    isActive: {
+        type: Boolean,
+        default: true
+    },
+    status: {
+        type: String,
+        enum: ['active', 'inactive'],
+        default: 'active'
+    },
+    deletionRequest: {
+        requested: { type: Boolean, default: false },
+        requestedAt: { type: Date, default: null },
+        reason: { type: String, default: '' },
+        contactPhone: { type: String, default: '' }
+    },
+    deletionAudit: {
+        deletedAt: { type: Date, default: null },
+        deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        deletedByName: { type: String, default: '' },
+        reason: { type: String, default: '' },
+        purgedFilesCount: { type: Number, default: 0 }
+    },
+    acceptedTerms: {
+        type: Boolean,
+        default: false
+    },
+    acceptedTermsAt: {
+        type: Date,
+        default: null
     },
     createdAt: {
         type: Date,

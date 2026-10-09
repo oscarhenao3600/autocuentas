@@ -9,6 +9,7 @@ const PaymentConfig = require('../models/PaymentConfig');
 const PaymentReceipt = require('../models/PaymentReceipt');
 const storageService = require('../services/storage.service');
 const templateService = require('../services/template.service');
+const AuditLog = require('../models/AuditLog');
 const { calculatePeriods } = require('../utils/period.utils');
 
 const TEMPLATES_DIR = path.resolve(__dirname, '..', 'templates');
@@ -136,7 +137,11 @@ exports.getRegisteredContractors = async (req, res) => {
                     paymentDate: p.paymentDate,
                     paymentAmount: p.paymentAmount
                 })),
-                createdAt: u.createdAt
+                createdAt: u.createdAt,
+                status: u.status || (u.isActive === false ? 'inactive' : 'active'),
+                isActive: u.isActive !== false,
+                deletionRequest: u.deletionRequest || null,
+                deletionAudit: u.deletionAudit || null
             };
         });
 
@@ -261,10 +266,11 @@ exports.deleteTemplate = async (req, res) => {
     }
 };
 
-// DELETE /api/admin/users/:id → Delete a contractor user and cascade delete their data
+// DELETE /api/admin/users/:id → Purge all documents, inactivate contractor and record audit log
 exports.deleteUser = async (req, res) => {
     try {
         const targetUserId = req.params.id;
+        const reason = req.body?.reason || req.query?.reason || 'Solicitud de eliminación definitiva de datos y purga de documentos';
 
         // Prevent self-deletion
         if (targetUserId === req.user._id.toString()) {
@@ -281,24 +287,189 @@ exports.deleteUser = async (req, res) => {
             return res.status(403).json({ message: 'No se permite eliminar cuentas con rol de administrador' });
         }
 
-        // 1. Delete associated Contract
-        await Contract.deleteMany({ user: targetUserId });
+        // 1. Gather all file paths to physically purge from Google Drive and storage
+        const filesToPurge = new Set();
 
-        // 2. Delete associated Billing Periods
-        await BillingPeriod.deleteMany({ user: targetUserId });
+        const contracts = await Contract.find({ user: targetUserId });
+        for (const c of contracts) {
+            const contractDocFields = [
+                'baseDocumentPath', 'actaInicioPath', 'rpPath', 'rutPath',
+                'bankCertificatePath', 'securitySocialPath', 'stampsPath',
+                'confidentialityDocPath', 'additionDocumentPath'
+            ];
+            for (const field of contractDocFields) {
+                if (c[field] && typeof c[field] === 'string' && c[field].trim()) {
+                    filesToPurge.add(c[field].trim());
+                }
+            }
+        }
 
-        // 3. Delete associated Accounts
-        await Account.deleteMany({ user: targetUserId });
+        const periods = await BillingPeriod.find({ user: targetUserId });
+        for (const p of periods) {
+            if (p.securitySocialPath) filesToPurge.add(p.securitySocialPath.trim());
+            if (p.securitySocialReceiptPath) filesToPurge.add(p.securitySocialReceiptPath.trim());
 
-        // 4. Delete the User
-        await User.findByIdAndDelete(targetUserId);
+            if (Array.isArray(p.activities)) {
+                for (const act of p.activities) {
+                    if (Array.isArray(act.evidences)) {
+                        for (const ev of act.evidences) {
+                            if (ev.path) filesToPurge.add(ev.path.trim());
+                            if (ev.googleDriveId) filesToPurge.add(ev.googleDriveId.trim());
+                            if (ev.driveId) filesToPurge.add(ev.driveId.trim());
+                        }
+                    }
+                }
+            }
+        }
+
+        const receipts = await PaymentReceipt.find({ user: targetUserId });
+        for (const r of receipts) {
+            if (r.receiptPath) filesToPurge.add(r.receiptPath.trim());
+        }
+
+        // 2. Physically purge every file from storage (Google Drive / disk)
+        let purgedCount = 0;
+        for (const filePath of filesToPurge) {
+            try {
+                await storageService.deleteFile(filePath);
+                purgedCount++;
+            } catch (fileErr) {
+                console.warn(`Aviso al purgar archivo "${filePath}":`, fileErr.message);
+            }
+        }
+
+        // 3. Clean references in Contracts and Periods
+        for (const c of contracts) {
+            c.baseDocumentPath = '';
+            c.actaInicioPath = '';
+            c.rpPath = '';
+            c.rutPath = '';
+            c.bankCertificatePath = '';
+            c.securitySocialPath = '';
+            c.stampsPath = '';
+            c.confidentialityDocPath = '';
+            c.additionDocumentPath = '';
+            c.status = 'finished';
+            await c.save();
+        }
+
+        for (const p of periods) {
+            p.securitySocialPath = '';
+            p.securitySocialReceiptPath = '';
+            if (Array.isArray(p.activities)) {
+                p.activities.forEach(a => {
+                    a.evidences = [];
+                });
+            }
+            p.status = 'discarded';
+            p.isDiscarded = true;
+            await p.save();
+        }
+
+        // 4. Inactivate contractor in database and store audit trail
+        const oldChatId = targetUser.telegramChatId;
+        targetUser.isActive = false;
+        targetUser.status = 'inactive';
+        targetUser.telegramChatId = null;
+        targetUser.telegramVerificationCode = null;
+        targetUser.deletionRequest = {
+            requested: false,
+            requestedAt: null,
+            reason: ''
+        };
+        targetUser.deletionAudit = {
+            deletedAt: new Date(),
+            deletedBy: req.user._id,
+            deletedByName: req.user.fullName || req.user.email,
+            reason: reason,
+            purgedFilesCount: purgedCount
+        };
+        await targetUser.save();
+
+        // 5. Register in AuditLog collection
+        await AuditLog.create({
+            action: 'CONTRACTOR_DATA_PURGED',
+            targetUser: targetUser._id,
+            targetUserName: targetUser.fullName,
+            targetUserCedula: contracts[0]?.idNumber || '',
+            targetUserEmail: targetUser.email,
+            performedBy: req.user._id,
+            performedByName: req.user.fullName || req.user.email,
+            reason: reason,
+            purgedFilesCount: purgedCount,
+            details: {
+                contractsCount: contracts.length,
+                periodsCount: periods.length,
+                purgedFilesCount: purgedCount,
+                filesCount: filesToPurge.size
+            }
+        });
+
+        // 6. Notify contractor via Telegram if they had active chat
+        if (oldChatId && process.env.TELEGRAM_BOT_TOKEN) {
+            try {
+                await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: oldChatId,
+                        text: `ℹ️ *Notificación de Eliminación de Datos*\n\nEstimado(a) ${targetUser.fullName}:\n\nEl Administrador Maestro ha procesado la eliminación definitiva de tus datos personales y soportes de la plataforma web.\n\n• Todos tus documentos y evidencias fueron purgados (${purgedCount} archivos eliminados).\n• Tu expediente ha sido inactivado en el sistema.\n• Motivo de auditoría registrado: "${reason}".`
+                    })
+                });
+            } catch (telegramErr) {
+                console.warn('Aviso: no se pudo notificar por Telegram la baja:', telegramErr.message);
+            }
+        }
 
         res.json({
-            message: `Usuario "${targetUser.fullName || targetUser.email}" y todos sus datos contractuales eliminados con éxito`
+            message: `Usuario "${targetUser.fullName || targetUser.email}" inactivado con éxito y ${purgedCount} documentos purgados definitivamente de los servidores.`,
+            purgedFilesCount: purgedCount,
+            deletionAudit: targetUser.deletionAudit
         });
     } catch (error) {
-        console.error('Error al eliminar usuario:', error);
-        res.status(500).json({ message: 'Error al eliminar el usuario', error: error.message });
+        console.error('Error al purgar e inactivar usuario:', error);
+        res.status(500).json({ message: 'Error al purgar los datos del usuario', error: error.message });
+    }
+};
+
+// PATCH /api/admin/users/:id/reactivate → Reactivate an inactivated contractor
+exports.reactivateContractor = async (req, res) => {
+    try {
+        const targetUserId = req.params.id;
+        const targetUser = await User.findById(targetUserId);
+        if (!targetUser) {
+            return res.status(404).json({ message: 'Usuario no encontrado' });
+        }
+
+        targetUser.isActive = true;
+        targetUser.status = 'active';
+        await targetUser.save();
+
+        await AuditLog.create({
+            action: 'CONTRACTOR_REACTIVATED',
+            targetUser: targetUser._id,
+            targetUserName: targetUser.fullName,
+            targetUserEmail: targetUser.email,
+            performedBy: req.user._id,
+            performedByName: req.user.fullName || req.user.email,
+            reason: req.body?.reason || 'Reactivación administrativa'
+        });
+
+        res.json({ message: `Contratista "${targetUser.fullName}" reactivado con éxito` });
+    } catch (error) {
+        console.error('Error al reactivar contratista:', error);
+        res.status(500).json({ message: 'Error al reactivar contratista', error: error.message });
+    }
+};
+
+// GET /api/admin/audit-logs → Retrieve audit log history
+exports.getAuditLogs = async (req, res) => {
+    try {
+        const logs = await AuditLog.find().sort({ timestamp: -1 }).limit(100);
+        res.json(logs);
+    } catch (error) {
+        console.error('Error al obtener registros de auditoría:', error);
+        res.status(500).json({ message: 'Error al obtener auditoría', error: error.message });
     }
 };
 

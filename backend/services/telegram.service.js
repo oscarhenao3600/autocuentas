@@ -6,10 +6,12 @@ const BillingPeriod = require('../models/BillingPeriod');
 const TelegramPrivilege = require('../models/TelegramPrivilege');
 const PaymentConfig = require('../models/PaymentConfig');
 const PaymentReceipt = require('../models/PaymentReceipt');
+const AuditLog = require('../models/AuditLog');
 const geminiService = require('./gemini.service');
 const storageService = require('./storage.service');
 const { generateBillingPackage } = require('../controllers/billing.controller');
 const { calculatePeriods, determineActiveAct, filterSpecificObligations, isGeneralObligation, getContractDurationText, formatFullContractNumber, isSecretariaTicContract } = require('../utils/period.utils');
+const { cleanCedula, isSeniorByCedula, getSeniorStatus, getEffectiveUiMode, formatKeyboardForMode, getTelegramAttachmentGuide } = require('../utils/age.utils');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let lastUpdateId = 0;
@@ -153,16 +155,20 @@ const sendTelegramMessage = async (chatId, text) => {
 /**
  * Sends a plain text message with Inline Keyboards
  */
-const sendTelegramKeyboardMessage = async (chatId, text, inlineKeyboard) => {
+const sendTelegramKeyboardMessage = async (chatId, text, inlineKeyboard, uiMode = null) => {
     if (!TELEGRAM_TOKEN) return;
     try {
+        let finalKeyboard = inlineKeyboard;
+        if (uiMode === 'senior') {
+            finalKeyboard = formatKeyboardForMode(inlineKeyboard, 'senior');
+        }
         const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 chat_id: chatId,
                 text: text,
-                reply_markup: inlineKeyboard ? { inline_keyboard: inlineKeyboard } : undefined
+                reply_markup: finalKeyboard ? { inline_keyboard: finalKeyboard } : undefined
             })
         });
         const data = await response.json();
@@ -177,9 +183,13 @@ const sendTelegramKeyboardMessage = async (chatId, text, inlineKeyboard) => {
 /**
  * Edits an existing message's text and/or inline keyboard (plain text)
  */
-const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard) => {
+const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard, uiMode = null) => {
     if (!TELEGRAM_TOKEN) return;
     try {
+        let finalKeyboard = inlineKeyboard;
+        if (uiMode === 'senior') {
+            finalKeyboard = formatKeyboardForMode(inlineKeyboard, 'senior');
+        }
         const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -187,18 +197,18 @@ const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard) => {
                 chat_id: chatId,
                 message_id: messageId,
                 text: text,
-                reply_markup: inlineKeyboard ? { inline_keyboard: inlineKeyboard } : undefined
+                reply_markup: finalKeyboard ? { inline_keyboard: finalKeyboard } : undefined
             })
         });
         const data = await response.json();
         if (!data.ok) {
             if (!data.description.includes('message is not modified')) {
-                await sendTelegramKeyboardMessage(chatId, text, inlineKeyboard);
+                await sendTelegramKeyboardMessage(chatId, text, finalKeyboard);
             }
         }
     } catch (err) {
         console.error('❌ Error en editTelegramMessage:', err.message);
-        await sendTelegramKeyboardMessage(chatId, text, inlineKeyboard);
+        await sendTelegramKeyboardMessage(chatId, text, inlineKeyboard, uiMode);
     }
 };
 
@@ -1282,16 +1292,30 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
             $or: [{ contract: contract._id }, { contract: null }]
         });
 
+        const uiMode = getEffectiveUiMode(user, contract);
         const banner = getContractBanner(contract);
-        let text = `${banner}📂 Gestión de Evidencias\n\n`;
-        if (activeInfo.hasTransitionPending) {
-            if (activeInfo.inGracePeriod) {
-                text += `⏳ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está en prórroga de radicación (${activeInfo.graceDaysRemaining} día(s) restantes). Puedes culminar evidencias y descargar el ZIP. Al mismo tiempo, la Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
-            } else {
-                text += `⚠️ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está pendiente por culminar o descargar ZIP. La Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
+        let text = '';
+        if (uiMode === 'senior') {
+            text = `${banner}🌟 *Tus Cuentas de Cobro*\n\n`;
+            if (activeInfo.hasTransitionPending) {
+                if (activeInfo.inGracePeriod) {
+                    text += `⏳ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está en prórroga de radicación (${activeInfo.graceDaysRemaining} día(s) restantes). Al mismo tiempo, la Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
+                } else {
+                    text += `⚠️ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está pendiente por terminar. La Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
+                }
             }
+            text += `👉 *Toca abajo la cuenta que deseas gestionar:*`;
+        } else {
+            text = `${banner}📂 Gestión de Evidencias\n\n`;
+            if (activeInfo.hasTransitionPending) {
+                if (activeInfo.inGracePeriod) {
+                    text += `⏳ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está en prórroga de radicación (${activeInfo.graceDaysRemaining} día(s) restantes). Puedes culminar evidencias y descargar el ZIP. Al mismo tiempo, la Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
+                } else {
+                    text += `⚠️ *Aviso:* La Cuenta ${activeInfo.unfinishedPreviousAct} está pendiente por culminar o descargar ZIP. La Cuenta ${activeInfo.targetAct} ya se encuentra habilitada.\n\n`;
+                }
+            }
+            text += `Selecciona el número de Acta de Cobro para la cual deseas cargar evidencias y comentarios:`;
         }
-        text += `Selecciona el número de Acta de Cobro para la cual deseas cargar evidencias y comentarios:`;
         const keyboard = [];
 
         for (const p of periods) {
@@ -1327,13 +1351,19 @@ const showActsMenu = async (chatId, user, editMessageId = null) => {
         }
 
         keyboard.push([
+            { text: uiMode === 'senior' ? '⚙️ Modo: 👵 Asistido (/modo)' : '⚙️ Cambiar Modo (/modo)', callback_data: 'open_mode_menu' }
+        ]);
+        keyboard.push([
             { text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }
+        ]);
+        keyboard.push([
+            { text: '🗑️ Solicitar Eliminación de Datos', callback_data: 'request_delete_data' }
         ]);
 
         if (editMessageId) {
-            await editTelegramMessage(chatId, editMessageId, text, keyboard);
+            await editTelegramMessage(chatId, editMessageId, text, keyboard, uiMode);
         } else {
-            await sendTelegramKeyboardMessage(chatId, text, keyboard);
+            await sendTelegramKeyboardMessage(chatId, text, keyboard, uiMode);
         }
     } catch (err) {
         console.error(err);
@@ -1812,10 +1842,13 @@ const showPeriodSummary = async (chatId, periodId, editMessageId = null) => {
             { text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }
         ]);
 
+        const activeUser = await resolveActiveUser(chatId);
+        const uiMode = getEffectiveUiMode(activeUser, contract);
+
         if (editMessageId) {
-            await editTelegramMessage(chatId, editMessageId, text, keyboard);
+            await editTelegramMessage(chatId, editMessageId, text, keyboard, uiMode);
         } else {
-            await sendTelegramKeyboardMessage(chatId, text, keyboard);
+            await sendTelegramKeyboardMessage(chatId, text, keyboard, uiMode);
         }
     } catch (err) {
         console.error(err);
@@ -1971,19 +2004,31 @@ const promptPeriodPlanilla = async (chatId, periodId) => {
         const toStr = period.periodTo ? period.periodTo.toISOString().split('T')[0] : '';
         const periodRange = (fromStr && toStr) ? ` (${fromStr} al ${toStr})` : '';
 
-        let text = `🏥 Carga de Planilla de Seguridad Social\nActa de Cobro N. ${period.actNumber}${periodRange}\n\n`;
-        text += `Por favor, adjunta el archivo PDF o foto de tu planilla de pago de aportes (PILA) correspondiente a este periodo.\n\n`;
-        text += `La Inteligencia Artificial extraerá automáticamente:\n`;
-        text += `• Operador (SIMPLE, SOI, Mi Planilla, etc.)\n`;
-        text += `• Número de planilla\n`;
-        text += `• Periodo de cotización\n`;
-        text += `• Aportes a Salud, Pensión, ARL y Total Pagado\n\n`;
-        text += `💡 Envía el archivo ahora o presiona cancelar para volver:`;
+        const contract = period.contract ? await Contract.findById(period.contract) : await Contract.findOne({ user: activeUser._id }).sort({ createdAt: -1 });
+        const uiMode = getEffectiveUiMode(activeUser, contract);
+
+        let text = '';
+        if (uiMode === 'senior') {
+            text = `🏥 *Subir Planilla de Salud y Pensión*\n`;
+            text += `Cuenta de Cobro N° ${period.actNumber}${periodRange}\n\n`;
+            text += `Para tramitar el pago de tus honorarios, por favor envíanos la foto o el PDF de tu planilla de salud y pensión.\n\n`;
+            text += getTelegramAttachmentGuide();
+            text += `\n\n👇 *Si deseas volver o cancelar, toca abajo:*`;
+        } else {
+            text = `🏥 Carga de Planilla de Seguridad Social\nActa de Cobro N. ${period.actNumber}${periodRange}\n\n`;
+            text += `Por favor, adjunta el archivo PDF o foto de tu planilla de pago de aportes (PILA) correspondiente a este periodo.\n\n`;
+            text += `La Inteligencia Artificial extraerá automáticamente:\n`;
+            text += `• Operador (SIMPLE, SOI, Mi Planilla, etc.)\n`;
+            text += `• Número de planilla\n`;
+            text += `• Periodo de cotización\n`;
+            text += `• Aportes a Salud, Pensión, ARL y Total Pagado\n\n`;
+            text += `💡 Envía el archivo ahora o presiona cancelar para volver:`;
+        }
 
         await sendTelegramKeyboardMessage(chatId, text, [
             [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }],
             [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
-        ]);
+        ], uiMode);
     } catch (err) {
         console.error('Error en promptPeriodPlanilla:', err);
         await sendTelegramMessage(chatId, '❌ Error al solicitar la planilla.');
@@ -2368,15 +2413,68 @@ const handleCallbackQuery = async (callbackQuery) => {
         return;
     }
 
+/**
+ * Displays the Terms and Conditions notice with Google Drive link before contractor registration
+ */
+const showTermsAndConditionsPrompt = async (chatId, cedula, messageId = null) => {
+    sessions.set(chatId, {
+        state: 'awaiting_terms_acceptance',
+        tempCedula: cedula
+    });
+
+    const termsFolderUrl = 'https://drive.google.com/drive/u/0/folders/14Jc9G7573rYuj5v6-Yo3wsvCPU4iU4g-';
+    const termsDocName = 'Terminos-Condiciones-Autocuentas';
+
+    let termsMsg = `📋 *TÉRMINOS Y CONDICIONES DEL SERVICIO*\n\n`;
+    termsMsg += `Estimado(a) contratista, estás a punto de iniciar tu registro en *Autocuentas*`;
+    if (cedula) termsMsg += ` con el documento de identidad *${cedula}*`;
+    termsMsg += `.\n\n`;
+    termsMsg += `Antes de ingresar tus datos personales y contractuales, te invitamos a consultar y leer detalladamente el documento oficial de Términos y Condiciones y Política de Tratamiento de Datos Personales (Habeas Data):\n\n`;
+    termsMsg += `📄 *Documento Oficial:* ${termsDocName}\n`;
+    termsMsg += `🔗 *Enlace de consulta:* [Ver Términos en Google Drive](${termsFolderUrl})\n\n`;
+    termsMsg += `📌 *Enlace web directo:*\n${termsFolderUrl}\n\n`;
+    termsMsg += `⚠️ *Aviso Legal e Institucional:*\n`;
+    termsMsg += `Al presionar *"✅ Acepto los Términos y Continuar"*, declaras de manera voluntaria, previa e informada que:\n`;
+    termsMsg += `1️⃣ Has tenido acceso al documento oficial *${termsDocName}* y aceptas sus condiciones.\n`;
+    termsMsg += `2️⃣ Autorizas el tratamiento de tus datos personales e información contractual (Ley 1581 de 2012) exclusivamente para la gestión de tus contratos y la generación de tus informes y cuentas de cobro.\n\n`;
+    termsMsg += `¿Aceptas los términos y condiciones para continuar con tu registro?`;
+
+    const keyboard = [
+        [{ text: '✅ Acepto los Términos y Continuar', callback_data: 'accept_terms_and_continue' }],
+        [{ text: '📄 Abrir Términos en Navegador', url: termsFolderUrl }],
+        [{ text: '❌ No Acepto / Cancelar', callback_data: 'cancel_registration' }]
+    ];
+
+    if (messageId) {
+        await editTelegramMessage(chatId, messageId, termsMsg, keyboard);
+    } else {
+        await sendTelegramKeyboardMessage(chatId, termsMsg, keyboard);
+    }
+};
+
     // Public / Registration callbacks (no existing user required)
     if (data === 'start_registration') {
         const session = sessions.get(chatId);
         const cedula = session?.tempCedula || '';
+        await showTermsAndConditionsPrompt(chatId, cedula, messageId);
+        return;
+    } else if (data === 'accept_terms_and_continue') {
+        const session = sessions.get(chatId);
+        const cedula = session?.tempCedula || '';
         sessions.set(chatId, {
             state: 'reg_step_name',
-            regData: { cedula }
+            tempCedula: cedula,
+            regData: {
+                cedula,
+                acceptedTerms: true,
+                acceptedTermsAt: new Date()
+            }
         });
-        await sendTelegramMessage(chatId, '📝 Paso 1 de 5: Nombre Completo\n\nPor favor, escribe tus nombres y apellidos completos:');
+        await sendTelegramMessage(chatId, '📝 *Paso 1 de 5: Nombre Completo*\n\nPor favor, escribe tus nombres y apellidos completos:');
+        return;
+    } else if (data === 'reenter_cedula') {
+        sessions.set(chatId, { state: 'awaiting_identification' });
+        await sendTelegramMessage(chatId, '🔄 Por favor, ingresa tu número de documento de identidad correcto (solo números, sin puntos ni comas):');
         return;
     } else if (data === 'cancel_registration') {
         sessions.delete(chatId);
@@ -2489,6 +2587,90 @@ const handleCallbackQuery = async (callbackQuery) => {
             return;
         }
         await sendTelegramMessage(chatId, '⚠️ Tu cuenta no está asociada. Envía un saludo (hola) para identificarte o registrarte.');
+        return;
+    }
+
+    // UI Mode Callbacks (/modo, set_mode_senior, set_mode_standard)
+    if (data === 'open_mode_menu') {
+        const contract = await resolveActiveContract(chatId, user);
+        const currentMode = getEffectiveUiMode(user, contract);
+        let modeMsg = `⚙️ *MODO DE VISUALIZACIÓN*\n\n`;
+        modeMsg += `Actualmente tu chat está configurado en: *${currentMode === 'senior' ? '👵 MODO ASISTIDO (Adulto Mayor / Fácil)' : '⚡ MODO ESTÁNDAR (Rápido y compacto)'}*\n\n`;
+        modeMsg += `El *Modo Asistido* está diseñado especialmente para adultos mayores o personas que prefieren máxima claridad:\n`;
+        modeMsg += `• Botones grandes de ancho completo (1 por fila para no equivocarse al presionar).\n`;
+        modeMsg += `• Guía ilustrada con el clip 📎 y cámara 📷 para enviar fotos o archivos.\n`;
+        modeMsg += `• Explicaciones amables y sencillas sin tecnicismos.\n\n`;
+        modeMsg += `Elige el modo que deseas usar:`;
+
+        await editTelegramMessage(chatId, messageId, modeMsg, [
+            [{ text: '👵 Activar Modo Asistido (Fácil / Adulto Mayor)', callback_data: 'set_mode_senior' }],
+            [{ text: '⚡ Activar Modo Estándar (Rápido)', callback_data: 'set_mode_standard' }],
+            [{ text: '📁 Volver al Menú de Actas', callback_data: 'show_acts_menu' }]
+        ], currentMode);
+        return;
+    } else if (data === 'set_mode_senior') {
+        user.uiMode = 'senior';
+        await user.save();
+        await sendTelegramMessage(chatId, '✅ ¡Modo Asistido activado! Ahora verás explicaciones más detalladas y botones grandes en una sola columna.');
+        await showActsMenu(chatId, user);
+        return;
+    } else if (data === 'set_mode_standard') {
+        user.uiMode = 'standard';
+        await user.save();
+        await sendTelegramMessage(chatId, '✅ ¡Modo Estándar activado! Interfaz rápida y compacta.');
+        await showActsMenu(chatId, user);
+        return;
+    }
+
+    // Deletion Request / Habeas Data Callbacks
+    if (data === 'request_delete_data') {
+        const contract = await resolveActiveContract(chatId, user);
+        const uiMode = getEffectiveUiMode(user, contract);
+        const contractorName = user.fullName || contract?.contractorName || 'Contratista';
+
+        let deleteInfoMsg = `🔒 *SOLICITUD DE ELIMINACIÓN DE DATOS (HABEAS DATA)*\n\n`;
+        deleteInfoMsg += `Estimado(a) *${contractorName}*:\n\n`;
+        deleteInfoMsg += `De acuerdo con las políticas de protección de datos y trazabilidad contractual de la entidad pública:\n\n`;
+        deleteInfoMsg += `📌 *La eliminación no se ejecuta de forma automática directa*, sino que se radica ante el *Administrador Maestro*, quien revisará tus motivos y procederá desde la plataforma web a eliminar definitivamente todos tus documentos de la nube e inactivar la cuenta con registro de auditoría.\n\n`;
+        deleteInfoMsg += `¿Deseas radicar tu solicitud indicando tus motivos?`;
+
+        await editTelegramMessage(chatId, messageId, deleteInfoMsg, [
+            [{ text: '✍️ Sí, radicar solicitud con mis motivos', callback_data: 'confirm_request_delete_data' }],
+            [{ text: '📞 Contactar al Administrador', callback_data: 'contact_admin_info' }],
+            [{ text: '❌ No, volver al menú', callback_data: 'show_acts_menu' }]
+        ], uiMode);
+        return;
+    } else if (data === 'confirm_request_delete_data') {
+        sessions.set(chatId, {
+            state: 'awaiting_deletion_reason',
+            userId: user._id
+        });
+        const contract = await resolveActiveContract(chatId, user);
+        const uiMode = getEffectiveUiMode(user, contract);
+
+        let reasonPrompt = `✍️ *Motivo de la Solicitud de Eliminación*\n\n`;
+        reasonPrompt += `Por favor escribe en un mensaje de texto la razón o motivo por el cual solicitas la eliminación de tus datos personales y soportes:\n\n`;
+        reasonPrompt += `*(Por ejemplo: "Finalicé mi contrato de prestación de servicios y solicito la baja de mis documentos")*\n\n`;
+        reasonPrompt += `💡 O presiona Cancelar para volver:`;
+
+        await editTelegramMessage(chatId, messageId, reasonPrompt, [
+            [{ text: '❌ Cancelar', callback_data: 'show_acts_menu' }]
+        ], uiMode);
+        return;
+    } else if (data === 'contact_admin_info') {
+        const contract = await resolveActiveContract(chatId, user);
+        const uiMode = getEffectiveUiMode(user, contract);
+
+        let adminContactMsg = `📞 *CONTACTO DEL ADMINISTRADOR MAESTRO*\n\n`;
+        adminContactMsg += `Para coordinar la baja y eliminación definitiva de tus datos, puedes radicar tu solicitud en el sistema con tus motivos o comunicarte con la Administración:\n\n`;
+        adminContactMsg += `• Tu número de cédula registrado: ${contract?.idNumber || 'Sin cédula'}\n`;
+        adminContactMsg += `• Correo vinculado: ${user.email}\n\n`;
+        adminContactMsg += `Al radicar la solicitud, el Administrador recibirá la alerta en la plataforma web para comunicarse contigo y proceder con la purga de documentos.`;
+
+        await editTelegramMessage(chatId, messageId, adminContactMsg, [
+            [{ text: '✍️ Radicar solicitud con motivos', callback_data: 'confirm_request_delete_data' }],
+            [{ text: '📁 Volver al Menú', callback_data: 'show_acts_menu' }]
+        ], uiMode);
         return;
     }
 
@@ -2881,13 +3063,73 @@ const handleIncomingMessage = async (message) => {
         return;
     }
 
-    // 1. Universal Reset / Cancellation / Navigation Commands
+    // 0.3 UI Mode Switch Command (/modo, /facil, /asistido, /estandar)
+    if (['/modo', 'modo', '/facil', 'facil', '/asistido', 'asistido', '/estandar', 'estandar'].includes(text.toLowerCase().trim())) {
+        const user = await resolveActiveUser(chatId);
+        const contract = await resolveActiveContract(chatId, user);
+        const currentMode = getEffectiveUiMode(user, contract);
+
+        let modeMsg = `⚙️ *MODO DE VISUALIZACIÓN*\n\n`;
+        modeMsg += `Actualmente tu chat está configurado en: *${currentMode === 'senior' ? '👵 MODO ASISTIDO (Adulto Mayor / Fácil)' : '⚡ MODO ESTÁNDAR (Rápido y compacto)'}*\n\n`;
+        modeMsg += `El *Modo Asistido* está diseñado para personas mayores de 60 años o quienes prefieren máxima claridad y sencillez:\n`;
+        modeMsg += `• Botones grandes de ancho completo (1 por fila para facilitar el toque en pantalla).\n`;
+        modeMsg += `• Guía explicativa con el clip 📎 y cámara 📷 para adjuntar fotos o documentos.\n`;
+        modeMsg += `• Explicaciones amables y sencillas sin tecnicismos.\n\n`;
+        modeMsg += `Selecciona el modo que prefieres para tu chat:`;
+
+        await sendTelegramKeyboardMessage(chatId, modeMsg, [
+            [{ text: '👵 Activar Modo Asistido (Fácil / Adulto Mayor)', callback_data: 'set_mode_senior' }],
+            [{ text: '⚡ Activar Modo Estándar (Rápido)', callback_data: 'set_mode_standard' }],
+            [{ text: '📁 Volver al Menú de Actas', callback_data: 'show_acts_menu' }]
+        ], currentMode);
+        return;
+    }
+
+    // 0.4 Deletion Request / Habeas Data Command (/eliminar, /eliminar_datos, /borrar_datos, /habeas_data, /baja)
     const cleanLower = text.toLowerCase().trim();
+    if (['/eliminar', 'eliminar', '/eliminar_datos', 'eliminar datos', '/borrar_datos', 'borrar datos', '/habeas_data', 'habeas data', '/baja', 'baja'].includes(cleanLower)) {
+        const user = await resolveActiveUser(chatId);
+        if (user) {
+            const contract = await resolveActiveContract(chatId, user);
+            const uiMode = getEffectiveUiMode(user, contract);
+            const contractorName = user.fullName || contract?.contractorName || 'Contratista';
+
+            let deleteInfoMsg = `🔒 *SOLICITUD DE ELIMINACIÓN DE DATOS (HABEAS DATA)*\n\n`;
+            deleteInfoMsg += `Estimado(a) *${contractorName}*:\n\n`;
+            deleteInfoMsg += `De acuerdo con las políticas de protección de datos y trazabilidad contractual de la entidad pública:\n\n`;
+            deleteInfoMsg += `📌 *La eliminación no se ejecuta de forma automática directa*, sino que se radica ante el *Administrador Maestro*, quien revisará tus motivos y procederá desde la plataforma web a eliminar definitivamente todos tus documentos de la nube e inactivar la cuenta con registro de auditoría.\n\n`;
+            deleteInfoMsg += `¿Deseas radicar tu solicitud indicando tus motivos?`;
+
+            await sendTelegramKeyboardMessage(chatId, deleteInfoMsg, [
+                [{ text: '✍️ Sí, radicar solicitud con mis motivos', callback_data: 'confirm_request_delete_data' }],
+                [{ text: '📞 Contactar al Administrador', callback_data: 'contact_admin_info' }],
+                [{ text: '❌ No, volver al menú', callback_data: 'show_acts_menu' }]
+            ], uiMode);
+            return;
+        }
+    }
+
+    // 1. Universal Reset / Cancellation / Navigation Commands
     const isExplicitCancel = ['/cancelar', 'cancelar', '/cancel', 'cancel', 'salir', '/salir', 'volver', '/volver', 'atras', '/atras'].includes(cleanLower);
     const isExplicitMenu = ['/menu', 'menu', '/inicio', 'inicio', '/reiniciar', 'reiniciar', '/actas', 'actas'].includes(cleanLower);
     const isStartAlone = (cleanLower === '/start' || cleanLower === 'start') && !/^\/start\s+\S+/i.test(text);
 
-    if (isExplicitCancel || isExplicitMenu || isStartAlone) {
+    if (isStartAlone) {
+        sessions.delete(chatId);
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (privilege) {
+            await showOperatorFuncionarioMenu(chatId, privilege);
+            return;
+        }
+        sessions.set(chatId, { state: 'awaiting_identification' });
+        let welcomeMsg = `👋 *¡Bienvenido(a) a Autocuentas!* 🏛️\n\n`;
+        welcomeMsg += `Sistema institucional para la gestión y radicación de cuentas de cobro y evidencias contractuales.\n\n`;
+        welcomeMsg += `Por favor, ingresa tu *número de documento de identidad* (cédula de ciudadanía, solo números, sin puntos ni comas) para verificar tu estado en el sistema:`;
+        await sendTelegramMessage(chatId, welcomeMsg);
+        return;
+    }
+
+    if (isExplicitCancel || isExplicitMenu) {
         sessions.delete(chatId);
         if (isExplicitCancel) {
             await sendTelegramMessage(chatId, '❌ Operación cancelada.');
@@ -2898,11 +3140,52 @@ const handleIncomingMessage = async (message) => {
             return;
         }
         const user = await resolveActiveUser(chatId);
+        if (user && (user.status === 'inactive' || user.isActive === false)) {
+            const audit = user.deletionAudit || {};
+            const dateStr = audit.deletedAt ? new Date(audit.deletedAt).toLocaleDateString('es-CO') : '';
+            let msg = `⚠️ *Cuenta Inactivada / Expediente Purgado*\n\n`;
+            msg += `Tu cuenta y todos tus documentos asociados fueron eliminados definitivamente de la plataforma web${dateStr ? ` el ${dateStr}` : ''}.\n\n`;
+            if (audit.reason) msg += `📝 *Motivo registrado en auditoría:* "${audit.reason}"\n`;
+            if (audit.deletedByName) msg += `👨‍💼 *Autorizado por:* ${audit.deletedByName}\n\n`;
+            msg += `Si necesitas asistencia o información adicional, por favor contacta directamente a la Administración.`;
+            await sendTelegramMessage(chatId, msg);
+            return;
+        }
         if (user) {
             await showActsMenu(chatId, user);
         } else {
-            await sendTelegramMessage(chatId, '👋 Sesión reiniciada. Escribe "hola" para identificarte o comenzar.');
+            sessions.set(chatId, { state: 'awaiting_identification' });
+            await sendTelegramMessage(chatId, '👋 Para comenzar, por favor ingresa tu número de documento de identidad (sin puntos ni comas):');
         }
+        return;
+    }
+
+    // 1.1 Natural Language Assistance for Seniors & General Common Questions
+    const helpPhrases = [
+        'como hago', 'cómo hago', 'no entiendo', 'ayuda', 'ayudame', 'ayúdame',
+        'no puedo', 'no se como', 'no sé como', 'no se qué hacer', 'no sé qué hacer',
+        'donde pago', 'dónde pago', 'que es la planilla', 'qué es la planilla',
+        'ya pague', 'ya pagué', 'como subir', 'cómo subir', 'explicame', 'explícame'
+    ];
+    const isAskingHelp = helpPhrases.some(phrase => cleanLower.includes(phrase));
+    if (isAskingHelp && !session) {
+        const user = await resolveActiveUser(chatId);
+        const contract = await resolveActiveContract(chatId, user);
+        const uiMode = getEffectiveUiMode(user, contract);
+
+        let helpMsg = `👵 *¡Con gusto te oriento paso a paso!*\n\n`;
+        helpMsg += `Cobrar tu cuenta mensual de honorarios es muy fácil y rápido:\n\n`;
+        helpMsg += `1️⃣ *Pagar Seguridad Social:* Realiza el pago de tu salud y pensión del mes (planilla PILA).\n`;
+        helpMsg += `2️⃣ *Subir tu Planilla:* Envíanos la foto o el PDF del recibo tocando el clip 📎 o cámara 📷 abajo a la derecha.\n`;
+        helpMsg += `3️⃣ *Listo:* El sistema genera automáticamente tus documentos e informe para radicar.\n\n`;
+        helpMsg += `👇 *¿Qué deseas hacer ahora? Toca una opción:*`;
+
+        await sendTelegramKeyboardMessage(chatId, helpMsg, [
+            [{ text: '🏥 Subir mi Planilla de Salud y Pensión', callback_data: 'quick_upload_planilla' }],
+            [{ text: '📋 Ver Mis Cuentas de Cobro', callback_data: 'show_acts_menu' }],
+            [{ text: '⚙️ Cambiar Modo (/modo)', callback_data: 'open_mode_menu' }],
+            [{ text: '📁 Volver al Menú', callback_data: 'show_acts_menu' }]
+        ], uiMode);
         return;
     }
 
@@ -2913,6 +3196,74 @@ const handleIncomingMessage = async (message) => {
 
     // 2. Active interactive states (highest priority: prevent greeting/trigger collision)
     if (session) {
+        // Awaiting Deletion Reason (Habeas Data)
+        if (session.state === 'awaiting_deletion_reason') {
+            const reasonText = (text || '').trim();
+            if (!reasonText || reasonText.length < 3) {
+                await sendTelegramMessage(chatId, '⚠️ Por favor escribe en un mensaje la razón o motivo de tu solicitud (o envía /cancelar para salir):');
+                return;
+            }
+
+            const activeUser = (session.userId ? await User.findById(session.userId) : null) || await resolveActiveUser(chatId);
+            if (!activeUser) {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '⚠️ Sesión expirada. Escribe "hola" para volver a comenzar.');
+                return;
+            }
+
+            const contract = await resolveActiveContract(chatId, activeUser);
+            activeUser.deletionRequest = {
+                requested: true,
+                requestedAt: new Date(),
+                reason: reasonText,
+                contactPhone: contract?.contractorPhone || ''
+            };
+            await activeUser.save();
+            sessions.delete(chatId);
+
+            // Register in AuditLog
+            await AuditLog.create({
+                action: 'CONTRACTOR_DELETION_REQUESTED',
+                targetUser: activeUser._id,
+                targetUserName: activeUser.fullName,
+                targetUserCedula: contract?.idNumber || '',
+                targetUserEmail: activeUser.email,
+                performedBy: activeUser._id,
+                performedByName: activeUser.fullName,
+                reason: reasonText,
+                details: {
+                    chatId: chatId,
+                    contractNumber: contract?.contractNumber || ''
+                }
+            });
+
+            // Notify Administrator(s) via Telegram if configured
+            const admins = await User.find({ role: 'admin', telegramChatId: { $ne: null } });
+            for (const adm of admins) {
+                try {
+                    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            chat_id: adm.telegramChatId,
+                            text: `🚨 *ALERTA: Solicitud de Eliminación de Datos (Habeas Data)*\n\n👤 *Contratista:* ${activeUser.fullName}\n🪪 *Cédula:* ${contract?.idNumber || 'Sin cédula'}\n📧 *Correo:* ${activeUser.email}\n📝 *Motivo manifestado:*\n"${reasonText}"\n\n👉 *Acción requerida:* Ingresa al panel web de administración para revisar el caso y proceder con la eliminación definitiva.`
+                        })
+                    });
+                } catch (_) {}
+            }
+
+            let confirmMsg = `✅ *Solicitud de Eliminación Radicada con Éxito*\n\n`;
+            confirmMsg += `Tu solicitud ha sido transmitida al Administrador Maestro con el siguiente motivo:\n\n`;
+            confirmMsg += `📝 *"${reasonText}"*\n\n`;
+            confirmMsg += `📌 El Administrador revisará tus motivos en la plataforma web y procederá a ejecutar la eliminación definitiva de tus archivos de la nube y la baja con registro formal de auditoría.\n\n`;
+            confirmMsg += `Si requieres contactarlo de inmediato, puedes escribirle por los canales oficiales de la entidad.`;
+
+            await sendTelegramKeyboardMessage(chatId, confirmMsg, [
+                [{ text: '📁 Volver al Menú de Actas', callback_data: 'show_acts_menu' }]
+            ]);
+            return;
+        }
+
         // Awaiting Payment Receipt
         if (session.state === 'awaiting_payment_receipt') {
             const media = extractTelegramFile(message);
@@ -3140,17 +3491,49 @@ const handleIncomingMessage = async (message) => {
                 return;
             }
 
+            // Search by cedula in User collection
+            let user = await User.findOne({
+                $or: [
+                    { cedula: inputCedula },
+                    { cedula: text.trim() }
+                ]
+            });
+
+            // Search by idNumber in Contract collection
             const allContracts = await Contract.find().populate('user').sort({ createdAt: -1 });
             const userContracts = allContracts.filter(c => (c.idNumber || '').replace(/\D/g, '') === inputCedula);
 
-            if (userContracts.length > 0) {
-                let user = userContracts[0].user;
+            if (!user && userContracts.length > 0) {
+                user = userContracts[0].user;
                 if (!user || !user._id) {
                     user = await User.findById(userContracts[0].user) || await User.findOne();
                 }
+            }
+            if (user && userContracts.length === 0) {
+                const contractsByUser = allContracts.filter(c => c.user && (c.user._id || c.user).toString() === user._id.toString());
+                userContracts.push(...contractsByUser);
+            }
+
+            // Check if user is inactive / purged
+            if (user && (user.status === 'inactive' || user.isActive === false)) {
+                const audit = user.deletionAudit || {};
+                const dateStr = audit.deletedAt ? new Date(audit.deletedAt).toLocaleDateString('es-CO') : '';
+                let inactMsg = `⚠️ *Cuenta Inactivada / Documentos Purgados*\n\n`;
+                inactMsg += `El documento ${inputCedula} ("${user.fullName}") fue dado de baja y sus archivos eliminados formalmente${dateStr ? ` el ${dateStr}` : ''}.\n\n`;
+                if (audit.reason) inactMsg += `📝 *Motivo registrado:* "${audit.reason}"\n`;
+                if (audit.deletedByName) inactMsg += `👨‍💼 *Autorizado por:* ${audit.deletedByName}\n\n`;
+                inactMsg += `Si requieres reactivar tu cuenta o soporte institucional, por favor comunícate directamente con la Administración.`;
+                await sendTelegramMessage(chatId, inactMsg);
+                return;
+            }
+
+            if (user || userContracts.length > 0) {
                 if (user) {
                     user.telegramChatId = chatId;
                     user.telegramVerificationCode = null;
+                    if (isSeniorByCedula(inputCedula) && !user.uiMode) {
+                        user.uiMode = 'senior';
+                    }
                     await user.save();
                 }
 
@@ -3164,12 +3547,22 @@ const handleIncomingMessage = async (message) => {
                         userId: user ? user._id : null
                     });
 
+                    // Auto-detect senior mode by Colombian cédula length and range
+                    if (isSeniorByCedula(inputCedula) && user && !user.uiMode) {
+                        user.uiMode = 'senior';
+                        await user.save();
+                    }
+                    const uiMode = getEffectiveUiMode(user, contract);
+
                     const contractorName = contract.contractorName || (user ? user.fullName : 'Funcionario / Contratista');
                     let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
                     reply += `👤 Funcionario: ${contractorName}\n`;
                     reply += `🪪 Cédula: ${contract.idNumber || inputCedula}\n`;
                     reply += `📋 Contrato: ${formatFullContractNumber(contract.contractNumber, contract.internalContractNumber) || 'En trámite'}\n`;
                     reply += `🏛️ Entidad: ${contract.entityName || contract.supervisorDependency || 'Alcaldía de Armenia'}\n\n`;
+                    if (uiMode === 'senior') {
+                        reply += `🌟 *Modo Asistido Activado*\nHemos configurado una vista con letras claras, explicaciones paso a paso y botones grandes para que tus trámites sean muy sencillos y cómodos.\n*(Si prefieres el modo estándar, solo escribe /modo)*\n\n`;
+                    }
                     reply += `Tu usuario ha sido verificado con éxito en la base de datos.\n\n`;
 
                     if (!contract.activities || contract.activities.length === 0) {
@@ -3182,7 +3575,7 @@ const handleIncomingMessage = async (message) => {
                         await sendTelegramKeyboardMessage(chatId, reply, [
                             [{ text: '📄 Sí, cargar documentos', callback_data: 'start_docs_flow' }],
                             [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
-                        ]);
+                        ], uiMode);
                     } else {
                         const activeInfo = await getContractCurrentActiveAct(user._id, contract._id, contract);
                         if (activeInfo.hasTransitionPending) {
@@ -3199,7 +3592,7 @@ const handleIncomingMessage = async (message) => {
                                 [{ text: '🏥 Subir Planilla SS', callback_data: 'quick_upload_planilla' }],
                                 [{ text: '📊 Resumen de Actas', callback_data: 'show_acts_menu' }],
                                 [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
-                            ]);
+                            ], uiMode);
                         } else {
                             reply += `¿Qué deseas gestionar para este contrato?`;
 
@@ -3209,11 +3602,15 @@ const handleIncomingMessage = async (message) => {
                                 [{ text: '📊 Resumen del Acta', callback_data: 'show_acts_menu' }],
                                 [{ text: '📦 Descargar Paquete ZIP', callback_data: 'download_zip' }],
                                 [{ text: '➕ Registrar Nuevo Contrato', callback_data: 'add_new_contract' }]
-                            ]);
+                            ], uiMode);
                         }
                     }
-                } else {
+                } else if (userContracts.length > 1) {
                     // Multiple contracts registered for this person
+                    if (isSeniorByCedula(inputCedula) && user && !user.uiMode) {
+                        user.uiMode = 'senior';
+                        await user.save();
+                    }
                     sessions.set(chatId, {
                         state: 'identified',
                         cedula: inputCedula,
@@ -3228,18 +3625,37 @@ const handleIncomingMessage = async (message) => {
 
                     await sendTelegramMessage(chatId, reply);
                     await showContractSelectionMenu(chatId, user);
+                } else {
+                    // Registered user without contract records yet
+                    sessions.set(chatId, {
+                        state: 'identified',
+                        cedula: inputCedula,
+                        userId: user._id
+                    });
+                    let reply = `✅ ¡Identidad confirmada en el sistema!\n\n`;
+                    reply += `👤 Funcionario: ${user.fullName}\n`;
+                    reply += `🪪 Cédula: ${inputCedula}\n\n`;
+                    reply += `Tu usuario está registrado en el sistema pero aún no tiene contratos vinculados.\n`;
+                    reply += `¿Deseas iniciar la carga de los documentos de tu contrato ahora?`;
+                    await sendTelegramKeyboardMessage(chatId, reply, [
+                        [{ text: '📄 Sí, configurar contrato', callback_data: 'start_docs_flow' }],
+                        [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
+                    ]);
                 }
             } else {
                 sessions.set(chatId, {
                     state: 'awaiting_registration_consent',
                     tempCedula: inputCedula
                 });
-                let reply = `❌ El documento de identidad "${inputCedula}" no fue encontrado en la base de datos de contratistas.\n\n`;
-                reply += `¿Deseas registrarte como nuevo contratista en el sistema?`;
+                let reply = `❌ El documento de identidad *${inputCedula}* no fue encontrado en la base de datos de contratistas.\n\n`;
+                reply += `¿Deseas registrarte como nuevo contratista en *Autocuentas*?`;
 
                 await sendTelegramKeyboardMessage(chatId, reply, [
                     [
-                        { text: '✅ Sí, registrarme', callback_data: 'start_registration' },
+                        { text: '📝 Sí, deseo registrarme', callback_data: 'start_registration' },
+                        { text: '🔄 Cambiar cédula', callback_data: 'reenter_cedula' }
+                    ],
+                    [
                         { text: '❌ No, cancelar', callback_data: 'cancel_registration' }
                     ]
                 ]);
@@ -3254,11 +3670,7 @@ const handleIncomingMessage = async (message) => {
         if (session.state === 'awaiting_registration_consent') {
             if (isAffirmative(text)) {
                 const cedula = session.tempCedula || '';
-                sessions.set(chatId, {
-                    state: 'reg_step_name',
-                    regData: { cedula }
-                });
-                await sendTelegramMessage(chatId, `📝 Paso 1 de 5: Nombre Completo\n\nPor favor, escribe tus nombres y apellidos completos:`);
+                await showTermsAndConditionsPrompt(chatId, cedula);
                 return;
             } else if (isNegative(text)) {
                 sessions.delete(chatId);
@@ -3267,9 +3679,43 @@ const handleIncomingMessage = async (message) => {
             } else {
                 await sendTelegramKeyboardMessage(chatId, `Por favor confirma si deseas registrarte como nuevo contratista en el sistema:`, [
                     [
-                        { text: '✅ Sí, registrarme', callback_data: 'start_registration' },
+                        { text: '📝 Sí, deseo registrarme', callback_data: 'start_registration' },
+                        { text: '🔄 Cambiar cédula', callback_data: 'reenter_cedula' }
+                    ],
+                    [
                         { text: '❌ No, cancelar', callback_data: 'cancel_registration' }
                     ]
+                ]);
+                return;
+            }
+        }
+
+        // Step 0.5: Terms and Conditions acceptance
+        if (session.state === 'awaiting_terms_acceptance') {
+            const clean = text.toLowerCase().trim();
+            if (['acepto', 'si', 'sí', 'continuar', 'de acuerdo', 'aceptar', 'proceder'].includes(clean) || isAffirmative(clean)) {
+                const cedula = session.tempCedula || '';
+                sessions.set(chatId, {
+                    state: 'reg_step_name',
+                    tempCedula: cedula,
+                    regData: {
+                        cedula,
+                        acceptedTerms: true,
+                        acceptedTermsAt: new Date()
+                    }
+                });
+                await sendTelegramMessage(chatId, `📝 *Paso 1 de 5: Nombre Completo*\n\nPor favor, escribe tus nombres y apellidos completos:`);
+                return;
+            } else if (isNegative(clean) || clean === 'no' || clean === 'cancelar' || clean === 'no acepto') {
+                sessions.delete(chatId);
+                await sendTelegramMessage(chatId, '❌ Registro cancelado. Al no aceptar los Términos y Condiciones, no es posible registrar tu usuario en el sistema. Escribe /start si deseas volver a empezar.');
+                return;
+            } else {
+                const termsFolderUrl = 'https://drive.google.com/drive/u/0/folders/14Jc9G7573rYuj5v6-Yo3wsvCPU4iU4g-';
+                await sendTelegramKeyboardMessage(chatId, `⚠️ Para continuar con tu registro es necesario aceptar los Términos y Condiciones. Puedes consultarlos o pulsar el botón abajo:`, [
+                    [{ text: '✅ Acepto los Términos y Continuar', callback_data: 'accept_terms_and_continue' }],
+                    [{ text: '📄 Abrir Términos en Navegador', url: termsFolderUrl }],
+                    [{ text: '❌ Cancelar', callback_data: 'cancel_registration' }]
                 ]);
                 return;
             }
@@ -3383,12 +3829,17 @@ const handleIncomingMessage = async (message) => {
                 const defaultPassword = `Contratista.${regData.cedula}*`;
 
                 // 1. Create User
+                const isSenior = isSeniorByCedula(regData.cedula);
                 const newUser = await User.create({
                     fullName: regData.fullName,
                     email: email,
+                    cedula: regData.cedula,
                     password: defaultPassword,
                     role: 'client',
-                    telegramChatId: chatId
+                    telegramChatId: chatId,
+                    uiMode: isSenior ? 'senior' : 'standard',
+                    acceptedTerms: true,
+                    acceptedTermsAt: regData.acceptedTermsAt || new Date()
                 });
 
                 // 2. Create Contract record linked to User
@@ -3414,6 +3865,9 @@ const handleIncomingMessage = async (message) => {
                 confirmMsg += `🏛️ Dependencia: ${regData.entity}\n`;
                 confirmMsg += `📱 Teléfono: ${regData.phone}\n`;
                 confirmMsg += `📧 Correo: ${email}\n\n`;
+                if (isSenior) {
+                    confirmMsg += `🌟 *Modo Asistido Activado*\nHemos configurado tu cuenta con explicaciones detalladas y botones grandes para que gestionar tus cuentas sea muy cómodo y seguro.\n*(Puedes cambiar de modo en cualquier momento con /modo)*\n\n`;
+                }
                 confirmMsg += `Tu usuario ha quedado registrado y vinculado a este chat de Telegram.\n\n`;
                 confirmMsg += `🔑 Acceso web:\n`;
                 confirmMsg += `• Usuario: ${email}\n`;
@@ -3424,7 +3878,7 @@ const handleIncomingMessage = async (message) => {
                 await sendTelegramKeyboardMessage(chatId, confirmMsg, [
                     [{ text: '📄 Sí, cargar documentos', callback_data: 'start_docs_flow' }],
                     [{ text: '⏰ Más tarde', callback_data: 'skip_docs_flow' }]
-                ]);
+                ], isSenior ? 'senior' : 'standard');
             } catch (err) {
                 console.error('Error al registrar usuario desde Telegram:', err);
                 await sendTelegramMessage(chatId, `❌ Ocurrió un error al registrar tus datos: ${err.message}. Por favor intenta nuevamente o escribe /cancelar.`);
@@ -4358,10 +4812,16 @@ const handleIncomingMessage = async (message) => {
 
             const media = extractTelegramFile(message);
             if (!media) {
-                await sendTelegramKeyboardMessage(chatId, '⚠️ Por favor adjunta el archivo PDF o foto de tu planilla de seguridad social, o presiona Cancelar:', [
+                const contract = await resolveActiveContract(chatId, user);
+                const uiMode = getEffectiveUiMode(user, contract);
+                let promptMsg = '⚠️ Por favor adjunta el archivo PDF o foto de tu planilla de seguridad social, o presiona Cancelar:';
+                if (uiMode === 'senior') {
+                    promptMsg = `👵 *Para subir tu planilla de salud y pensión:*\n\n` + getTelegramAttachmentGuide();
+                }
+                await sendTelegramKeyboardMessage(chatId, promptMsg, [
                     [{ text: '❌ Cancelar', callback_data: session.periodId ? `summary_${session.periodId}` : 'show_acts_menu' }],
                     [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
-                ]);
+                ], uiMode);
                 return;
             }
 
@@ -4718,31 +5178,62 @@ const handleIncomingMessage = async (message) => {
     if (isOnlyDigitsAndDots && numericOnly.length >= 6 && numericOnly.length <= 11) {
         const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
 
+        let user = await User.findOne({
+            $or: [
+                { cedula: numericOnly },
+                { cedula: text.trim() }
+            ]
+        });
+
         const allContracts = await Contract.find().populate('user').sort({ createdAt: -1 });
         const userContracts = allContracts.filter(c => (c.idNumber || '').replace(/\D/g, '') === numericOnly);
 
-        if (userContracts.length > 0) {
-            let user = userContracts[0].user;
+        if (!user && userContracts.length > 0) {
+            user = userContracts[0].user;
             if (!user || !user._id) {
                 user = await User.findById(userContracts[0].user) || await User.findOne();
             }
+        }
+        if (user && userContracts.length === 0) {
+            const contractsByUser = allContracts.filter(c => c.user && (c.user._id || c.user).toString() === user._id.toString());
+            userContracts.push(...contractsByUser);
+        }
 
+        // Check if inactive
+        if (user && (user.status === 'inactive' || user.isActive === false)) {
+            const audit = user.deletionAudit || {};
+            const dateStr = audit.deletedAt ? new Date(audit.deletedAt).toLocaleDateString('es-CO') : '';
+            let inactMsg = `⚠️ *Cuenta Inactivada / Documentos Purgados*\n\n`;
+            inactMsg += `El documento ${numericOnly} ("${user.fullName}") fue dado de baja y sus archivos eliminados formalmente${dateStr ? ` el ${dateStr}` : ''}.\n\n`;
+            if (audit.reason) inactMsg += `📝 *Motivo registrado:* "${audit.reason}"\n`;
+            if (audit.deletedByName) inactMsg += `👨‍💼 *Autorizado por:* ${audit.deletedByName}\n\n`;
+            inactMsg += `Si requieres reactivar tu cuenta o soporte institucional, por favor comunícate directamente con la Administración.`;
+            await sendTelegramMessage(chatId, inactMsg);
+            return;
+        }
+
+        if (user || userContracts.length > 0) {
             if (privilege) {
                 // If operator, verify scope
                 if (privilege.scope === 'specific') {
-                    const isAssigned = (privilege.assignedUsers || []).some(id => id.toString() === user._id.toString());
+                    const isAssigned = (privilege.assignedUsers || []).some(id => id.toString() === (user?._id || '').toString());
                     if (!isAssigned) {
-                        await sendTelegramMessage(chatId, `⚠️ No tienes permisos asignados para gestionar al funcionario con cédula ${numericOnly} ("${user.fullName}"). Solicita al Administrador Maestro que te lo asigne desde el panel web.`);
+                        await sendTelegramMessage(chatId, `⚠️ No tienes permisos asignados para gestionar al funcionario con cédula ${numericOnly} ("${user?.fullName || ''}"). Solicita al Administrador Maestro que te lo asigne desde el panel web.`);
                         return;
                     }
                 }
-                await selectOperatorUser(chatId, privilege, user._id);
-                return;
+                if (user) {
+                    await selectOperatorUser(chatId, privilege, user._id);
+                    return;
+                }
             }
 
             if (user) {
                 user.telegramChatId = chatId;
                 user.telegramVerificationCode = null;
+                if (isSeniorByCedula(numericOnly) && !user.uiMode) {
+                    user.uiMode = 'senior';
+                }
                 await user.save();
             }
 
@@ -4856,12 +5347,15 @@ const handleIncomingMessage = async (message) => {
                 state: 'awaiting_registration_consent',
                 tempCedula: numericOnly
             });
-            let reply = `❌ El documento de identidad "${numericOnly}" no fue encontrado en la base de datos de contratistas.\n\n`;
-            reply += `¿Deseas registrarte como nuevo contratista en el sistema?`;
+            let reply = `❌ El documento de identidad *${numericOnly}* no fue encontrado en la base de datos de contratistas.\n\n`;
+            reply += `¿Deseas registrarte como nuevo contratista en *Autocuentas*?`;
 
             await sendTelegramKeyboardMessage(chatId, reply, [
                 [
-                    { text: '✅ Sí, registrarme', callback_data: 'start_registration' },
+                    { text: '📝 Sí, deseo registrarme', callback_data: 'start_registration' },
+                    { text: '🔄 Cambiar cédula', callback_data: 'reenter_cedula' }
+                ],
+                [
                     { text: '❌ No, cancelar', callback_data: 'cancel_registration' }
                 ]
             ]);
@@ -5344,5 +5838,6 @@ module.exports = {
     handleIncomingMessage,
     handleCallbackQuery,
     checkAndAdvancePaymentStatus,
-    getContractCurrentActiveAct
+    getContractCurrentActiveAct,
+    sessions
 };
