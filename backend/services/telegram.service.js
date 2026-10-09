@@ -648,13 +648,20 @@ const checkAndAdvancePaymentStatus = async (user, contract) => {
 /**
  * Resolves the current target act for a contract based on contract start date, elapsed calendar time, and download status
  */
-const getContractCurrentActiveAct = async (userId, contractId, contract) => {
+const getContractCurrentActiveAct = async (userId, contractId, contract = null) => {
     try {
+        if (!contract && contractId) {
+            contract = await Contract.findById(contractId);
+        }
+        if (!contract && userId) {
+            contract = await Contract.findOne({ user: userId }).sort({ createdAt: -1 });
+        }
+
         await checkAndAdvancePaymentStatus({ _id: userId }, contract);
 
         const existingPeriods = await BillingPeriod.find({
             user: userId,
-            contract: contractId
+            contract: contractId || (contract ? contract._id : null)
         }).sort({ actNumber: 1 });
 
         const activeResult = determineActiveAct(contract, existingPeriods, new Date());
@@ -2740,15 +2747,17 @@ const showTermsAndConditionsPrompt = async (chatId, cedula, messageId = null) =>
                 contract.endDate,
                 contract.customDeliveryDate
             );
+            const rawStart = contract.startDate ? (contract.startDate instanceof Date ? contract.startDate.toISOString().split('T')[0] : String(contract.startDate).split('T')[0]) : 'N/A';
+            const rawEnd = contract.endDate ? (contract.endDate instanceof Date ? contract.endDate.toISOString().split('T')[0] : String(contract.endDate).split('T')[0]) : 'N/A';
             const periodInfo = periodsTimeline.find(p => p.actNumber === actNumber) || {
-                from: contract.startDate ? contract.startDate.toISOString().split('T')[0] : 'N/A',
-                to: contract.endDate ? contract.endDate.toISOString().split('T')[0] : 'N/A'
+                from: rawStart,
+                to: rawEnd
             };
 
-            const specificActivities = (contract.activities || []).filter(act => !isGeneralObligation(act.description));
+            const specificActivities = filterSpecificObligations(contract.activities || []);
             const initialActivities = specificActivities.map((act, idx) => ({
-                obligationCode: act.code || `2.2.${idx + 1}`,
-                obligationText: act.description,
+                obligationCode: (typeof act === 'object' && act.code) ? act.code : `2.2.${idx + 1}`,
+                obligationText: typeof act === 'string' ? act : (act.description || act.text || `Obligación contractual ${idx + 1}`),
                 comment: '',
                 evidences: []
             }));

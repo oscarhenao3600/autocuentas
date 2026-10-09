@@ -7,6 +7,7 @@
     "dev": "nodemon server.js",
     "migrate:drive": "node scripts/migrate-to-drive.js",
     "auth:drive": "node scripts/setup-drive-auth.js",
+    "db:repair": "node scripts/repair-database.js",
     "seed": "node seed.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
