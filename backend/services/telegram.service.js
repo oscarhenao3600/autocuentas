@@ -191,11 +191,14 @@ const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard) => {
             })
         });
         const data = await response.json();
-        if (!data.ok && !data.description.includes('message is not modified')) {
-            console.error('⚠️ Error al editar mensaje Telegram:', data.description);
+        if (!data.ok) {
+            if (!data.description.includes('message is not modified')) {
+                await sendTelegramKeyboardMessage(chatId, text, inlineKeyboard);
+            }
         }
     } catch (err) {
         console.error('❌ Error en editTelegramMessage:', err.message);
+        await sendTelegramKeyboardMessage(chatId, text, inlineKeyboard);
     }
 };
 
@@ -1723,9 +1726,27 @@ const selectObligationFlow = async (chatId, user, periodId, index, editMessageId
  */
 const showPeriodSummary = async (chatId, periodId, editMessageId = null) => {
     try {
-        const period = await BillingPeriod.findById(periodId);
+        sessions.set(chatId, { state: 'idle' });
+        let period = null;
+        if (periodId && periodId !== 'undefined' && /^[0-9a-fA-F]{24}$/.test(periodId)) {
+            period = await BillingPeriod.findById(periodId);
+        }
         if (!period) {
-            await sendTelegramMessage(chatId, '⚠️ Periodo no encontrado.');
+            const user = await resolveActiveUser(chatId);
+            if (user) {
+                const contract = await resolveActiveContract(chatId, user);
+                const query = { user: user._id };
+                if (contract) query.contract = contract._id;
+                period = await BillingPeriod.findOne(query).sort({ createdAt: -1 });
+            }
+        }
+        if (!period) {
+            const user = await resolveActiveUser(chatId);
+            if (user) {
+                await showActsMenu(chatId, user, editMessageId);
+            } else {
+                await sendTelegramMessage(chatId, '⚠️ Periodo no encontrado. Escribe "hola" para comenzar.');
+            }
             return;
         }
 
@@ -1784,7 +1805,10 @@ const showPeriodSummary = async (chatId, periodId, editMessageId = null) => {
             { text: period.securitySocialReceiptPath ? '🔄 Comprobante SS' : '🧾 Subir Comprobante SS', callback_data: `upload_comprobante_${period._id}` }
         ]);
         keyboard.push([
-            { text: '📁 Cambiar de Acta', callback_data: 'show_acts_menu' },
+            { text: `📋 Ver Obligaciones (Acta ${period.actNumber})`, callback_data: `select_act_${period.actNumber}` },
+            { text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }
+        ]);
+        keyboard.push([
             { text: '🔄 Cambiar de Contrato', callback_data: 'switch_contract' }
         ]);
 
@@ -1814,7 +1838,8 @@ const startContractDocsFlow = async (chatId, user) => {
     text += `💡 Si no lo tienes a la mano en este momento, puedes escribir "saltar" o presionar el botón abajo:`;
 
     await sendTelegramKeyboardMessage(chatId, text, [
-        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_minuta' }]
+        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_minuta' }],
+        [{ text: '❌ Cancelar proceso', callback_data: 'skip_docs_flow' }]
     ]);
 };
 
@@ -1833,7 +1858,8 @@ const promptActaInicio = async (chatId, user) => {
     text += `💡 Puedes escribir "saltar" o presionar el botón abajo si no la tienes a la mano:`;
 
     await sendTelegramKeyboardMessage(chatId, text, [
-        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_acta' }]
+        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_acta' }],
+        [{ text: '❌ Cancelar proceso', callback_data: 'skip_docs_flow' }]
     ]);
 };
 
@@ -1852,7 +1878,8 @@ const promptRp = async (chatId, user) => {
     text += `💡 Puedes escribir "saltar" o presionar el botón abajo si no lo tienes a la mano:`;
 
     await sendTelegramKeyboardMessage(chatId, text, [
-        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_rp' }]
+        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_rp' }],
+        [{ text: '❌ Cancelar proceso', callback_data: 'skip_docs_flow' }]
     ]);
 };
 
@@ -1871,7 +1898,8 @@ const promptRut = async (chatId, user) => {
     text += `💡 Puedes escribir "saltar" o presionar el botón abajo si no lo tienes a la mano:`;
 
     await sendTelegramKeyboardMessage(chatId, text, [
-        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_rut' }]
+        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_rut' }],
+        [{ text: '❌ Cancelar proceso', callback_data: 'skip_docs_flow' }]
     ]);
 };
 
@@ -1890,7 +1918,8 @@ const promptBank = async (chatId, user) => {
     text += `💡 Puedes escribir "saltar" o presionar el botón abajo si no la tienes a la mano:`;
 
     await sendTelegramKeyboardMessage(chatId, text, [
-        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_bank' }]
+        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_bank' }],
+        [{ text: '❌ Cancelar proceso', callback_data: 'skip_docs_flow' }]
     ]);
 };
 
@@ -1909,7 +1938,8 @@ const promptSecuritySocial = async (chatId, user) => {
     text += `💡 Puedes escribir "saltar" o presionar el botón abajo si no la tienes a la mano:`;
 
     await sendTelegramKeyboardMessage(chatId, text, [
-        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_planilla' }]
+        [{ text: '⏩ Saltar este documento', callback_data: 'skip_doc_planilla' }],
+        [{ text: '❌ Cancelar proceso', callback_data: 'skip_docs_flow' }]
     ]);
 };
 
@@ -1951,7 +1981,8 @@ const promptPeriodPlanilla = async (chatId, periodId) => {
         text += `💡 Envía el archivo ahora o presiona cancelar para volver:`;
 
         await sendTelegramKeyboardMessage(chatId, text, [
-            [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }]
+            [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }],
+            [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
         ]);
     } catch (err) {
         console.error('Error en promptPeriodPlanilla:', err);
@@ -1982,7 +2013,8 @@ const promptPeriodComprobante = async (chatId, periodId) => {
 
         await sendTelegramKeyboardMessage(chatId, text, [
             [{ text: '⏩ Omitir por ahora', callback_data: `skip_comprobante_${period._id}` }],
-            [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }]
+            [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }],
+            [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
         ]);
     } catch (err) {
         console.error('Error en promptPeriodComprobante:', err);
@@ -2404,9 +2436,14 @@ const handleCallbackQuery = async (callbackQuery) => {
             await sendTelegramMessage(chatId, '⚠️ Por favor saluda con "hola" para identificarte primero.');
         }
         return;
-    } else if (data === 'skip_docs_flow') {
+    } else if (data === 'skip_docs_flow' || data === 'cancel_docs_flow') {
         sessions.set(chatId, { state: 'idle' });
-        await sendTelegramMessage(chatId, '👍 Entendido. Cuando desees cargar los documentos de tu contrato, escribe "documentos" o "hola".');
+        await sendTelegramMessage(chatId, '👍 Proceso de carga de documentos omitido/cancelado.');
+        if (user) {
+            await showActsMenu(chatId, user);
+        } else {
+            await sendTelegramMessage(chatId, 'Cuando desees continuar, escribe "documentos" o "hola".');
+        }
         return;
     } else if (data === 'skip_doc_minuta') {
         await sendTelegramMessage(chatId, '⏩ Minuta omitida.');
@@ -2457,6 +2494,7 @@ const handleCallbackQuery = async (callbackQuery) => {
 
     // Multi-Contract Switching & Creation Callbacks
     if (data === 'switch_contract' || data === 'show_contracts_menu') {
+        sessions.set(chatId, { state: 'idle' });
         await showContractSelectionMenu(chatId, user, messageId);
         return;
     } else if (data.startsWith('select_contract_')) {
@@ -2465,6 +2503,7 @@ const handleCallbackQuery = async (callbackQuery) => {
         if (!contract || contract.user.toString() !== user._id.toString()) {
             await sendTelegramMessage(chatId, '⚠️ Contrato no encontrado o no pertenece a tu usuario.');
             return;
+        }
         await showSingleContractMenu(chatId, user, contract, messageId);
         return;
     } else if (data === 'add_new_contract') {
@@ -2487,16 +2526,18 @@ const handleCallbackQuery = async (callbackQuery) => {
             ]);
         }
         return;
-    }
-
-    if (data === 'go_back_acts' || data === 'subir_evidencia') {
+    } else if (data === 'go_back_acts' || data === 'subir_evidencia') {
+        sessions.set(chatId, { state: 'idle' });
         await showObligationsFlow(chatId, user, messageId);
+        return;
     } else if (data === 'show_acts_menu') {
         sessions.set(chatId, { state: 'idle' });
         await showActsMenu(chatId, user, messageId);
+        return;
     } else if (data.startsWith('select_act_')) {
         const actNumber = parseInt(data.replace('select_act_', ''), 10);
         await selectActFlow(chatId, user, actNumber, messageId);
+        return;
     } else if (data.startsWith('discard_act_')) {
         const actNumber = parseInt(data.replace('discard_act_', ''), 10);
         const contract = await resolveActiveContract(chatId, user);
@@ -2582,15 +2623,17 @@ const handleCallbackQuery = async (callbackQuery) => {
         await sendTelegramMessage(chatId, `🔄 *Cuenta ${actNumber} reactivada correctamente.*\n\nYa puedes cargar evidencias y comentarios para esta cuenta.`);
         await selectActFlow(chatId, user, actNumber, null);
         return;
-    }
     } else if (data.startsWith('select_obl_')) {
         const parts = data.split('_');
         const index = parseInt(parts[2], 10);
         const periodId = parts[3];
         await selectObligationFlow(chatId, user, periodId, index, messageId);
+        return;
     } else if (data.startsWith('summary_')) {
+        sessions.set(chatId, { state: 'idle' });
         const periodId = data.replace('summary_', '');
         await showPeriodSummary(chatId, periodId, messageId);
+        return;
     } else if (data === 'download_zip') {
         const contract = await resolveActiveContract(chatId, user);
         const query = { user: user._id };
@@ -2838,11 +2881,34 @@ const handleIncomingMessage = async (message) => {
         return;
     }
 
-    // 1. Cancellation command
-    if (text === '/cancelar' || text.toLowerCase() === 'cancelar' || text === '/cancel') {
+    // 1. Universal Reset / Cancellation / Navigation Commands
+    const cleanLower = text.toLowerCase().trim();
+    const isExplicitCancel = ['/cancelar', 'cancelar', '/cancel', 'cancel', 'salir', '/salir', 'volver', '/volver', 'atras', '/atras'].includes(cleanLower);
+    const isExplicitMenu = ['/menu', 'menu', '/inicio', 'inicio', '/reiniciar', 'reiniciar', '/actas', 'actas'].includes(cleanLower);
+    const isStartAlone = (cleanLower === '/start' || cleanLower === 'start') && !/^\/start\s+\S+/i.test(text);
+
+    if (isExplicitCancel || isExplicitMenu || isStartAlone) {
         sessions.delete(chatId);
-        await sendTelegramMessage(chatId, '❌ Operación cancelada. Sesión reiniciada.');
+        if (isExplicitCancel) {
+            await sendTelegramMessage(chatId, '❌ Operación cancelada.');
+        }
+        const privilege = await TelegramPrivilege.findOne({ telegramChatId: chatId, isActive: true });
+        if (privilege) {
+            await showOperatorFuncionarioMenu(chatId, privilege);
+            return;
+        }
+        const user = await resolveActiveUser(chatId);
+        if (user) {
+            await showActsMenu(chatId, user);
+        } else {
+            await sendTelegramMessage(chatId, '👋 Sesión reiniciada. Escribe "hola" para identificarte o comenzar.');
+        }
         return;
+    }
+
+    // If user sends a greeting while in an active state, clear the stuck session so greeting can proceed cleanly
+    if (session && isGreeting(text)) {
+        sessions.delete(chatId);
     }
 
     // 2. Active interactive states (highest priority: prevent greeting/trigger collision)
@@ -4293,7 +4359,8 @@ const handleIncomingMessage = async (message) => {
             const media = extractTelegramFile(message);
             if (!media) {
                 await sendTelegramKeyboardMessage(chatId, '⚠️ Por favor adjunta el archivo PDF o foto de tu planilla de seguridad social, o presiona Cancelar:', [
-                    [{ text: '❌ Cancelar', callback_data: `summary_${session.periodId}` }]
+                    [{ text: '❌ Cancelar', callback_data: session.periodId ? `summary_${session.periodId}` : 'show_acts_menu' }],
+                    [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
                 ]);
                 return;
             }
@@ -4363,7 +4430,8 @@ const handleIncomingMessage = async (message) => {
                         session.refContractId = refContract?._id;
                         sessions.set(chatId, session);
                         await sendTelegramKeyboardMessage(chatId, `🔐 *Planilla de Seguridad Social Protegida con Contraseña*\n\nTu planilla tiene clave e intentamos abrirla automáticamente con tu número de cédula (*${refContract?.idNumber || 'No registrada'}*), pero no coincidió.\n\n👉 *Por favor escribe y envía la contraseña de tu planilla de seguridad social aquí por este chat:*`, [
-                            [{ text: '❌ Cancelar', callback_data: `summary_${period._id}` }]
+                            [{ text: '❌ Cancelar', callback_data: period ? `summary_${period._id}` : 'show_acts_menu' }],
+                            [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
                         ]);
                         return;
                     } else {
@@ -4447,7 +4515,8 @@ const handleIncomingMessage = async (message) => {
             } catch (passErr) {
                 if (passErr.code === 'PASSWORD_REQUIRED') {
                     await sendTelegramKeyboardMessage(chatId, '❌ La contraseña ingresada no es correcta para la planilla. Por favor escríbela nuevamente o presiona Cancelar:', [
-                        [{ text: '❌ Cancelar', callback_data: `summary_${periodId}` }]
+                        [{ text: '❌ Cancelar', callback_data: periodId ? `summary_${periodId}` : 'show_acts_menu' }],
+                        [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
                     ]);
                     return;
                 }
@@ -4486,7 +4555,8 @@ const handleIncomingMessage = async (message) => {
             if (!media) {
                 await sendTelegramKeyboardMessage(chatId, '⚠️ Por favor adjunta el archivo PDF o foto de tu comprobante de pago de seguridad social, o presiona Omitir:', [
                     [{ text: '⏩ Omitir por ahora', callback_data: `skip_comprobante_${periodId}` }],
-                    [{ text: '❌ Cancelar', callback_data: `summary_${periodId}` }]
+                    [{ text: '❌ Cancelar', callback_data: periodId ? `summary_${periodId}` : 'show_acts_menu' }],
+                    [{ text: '📁 Menú de Actas', callback_data: 'show_acts_menu' }]
                 ]);
                 return;
             }
