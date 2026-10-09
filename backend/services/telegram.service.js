@@ -12,6 +12,7 @@ const storageService = require('./storage.service');
 const { generateBillingPackage } = require('../controllers/billing.controller');
 const { calculatePeriods, determineActiveAct, filterSpecificObligations, isGeneralObligation, getContractDurationText, formatFullContractNumber, isSecretariaTicContract } = require('../utils/period.utils');
 const { cleanCedula, isSeniorByCedula, getSeniorStatus, getEffectiveUiMode, formatKeyboardForMode, getTelegramAttachmentGuide } = require('../utils/age.utils');
+const { getTermsPdfBuffer } = require('../utils/terms_pdf');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let lastUpdateId = 0;
@@ -218,13 +219,13 @@ const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard, uiMo
 const sendTelegramDocument = async (chatId, filePath, caption, customFilename = null) => {
     if (!TELEGRAM_TOKEN || !filePath) return;
     try {
-        const fileBuffer = await storageService.getFileBuffer(filePath);
+        const fileBuffer = Buffer.isBuffer(filePath) ? filePath : await storageService.getFileBuffer(filePath);
         if (!fileBuffer) {
             console.error('⚠️ Archivo no encontrado para enviar por Telegram:', filePath);
             return;
         }
 
-        let filename = customFilename || path.basename(filePath.replace(/\\/g, '/')) || 'documento.bin';
+        let filename = customFilename || (typeof filePath === 'string' ? path.basename(filePath.replace(/\\/g, '/')) : 'documento.pdf') || 'documento.bin';
         if (filename.length > 100) filename = 'documento.bin';
 
         const boundary = '----TelegramBotBoundary' + Date.now().toString(16);
@@ -2421,23 +2422,6 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 
 /**
- * Resolves the path to the official Terms and Conditions PDF document
- */
-const resolveTermsPdfPath = () => {
-    const localCandidates = [
-        path.join(__dirname, '..', 'templates', 'Terminos-Condiciones-Autocuentas.pdf'),
-        path.join(__dirname, '..', 'uploads', 'Terminos-Condiciones-Autocuentas.pdf'),
-        path.resolve('templates/Terminos-Condiciones-Autocuentas.pdf'),
-        path.resolve('uploads/Terminos-Condiciones-Autocuentas.pdf')
-    ];
-    for (const p of localCandidates) {
-        if (fs.existsSync(p)) return p;
-    }
-    // Direct Google Drive file ID (downloads single file buffer, does NOT expose folder)
-    return '18d0e_EDZs1Z_f7HfL259yH6cIUycGqeC';
-};
-
-/**
  * Sends the official Terms and Conditions PDF directly into the chat and displays the acceptance prompt
  */
 const showTermsAndConditionsPrompt = async (chatId, cedula, messageId = null) => {
@@ -2446,18 +2430,21 @@ const showTermsAndConditionsPrompt = async (chatId, cedula, messageId = null) =>
         tempCedula: cedula
     });
 
-    const termsPdfPath = resolveTermsPdfPath();
-    const termsDocName = 'Terminos-Condiciones-Autocuentas.pdf';
-
     if (messageId) {
         await editTelegramMessage(chatId, messageId, '⏳ Enviando documento oficial de Términos y Condiciones a tu chat...');
     }
 
-    // 1. Send the PDF file directly to the contractor's chat so they can read and view it locally
+    let termsDocName = 'Terminos-Condiciones-Autocuentas.pdf';
     try {
+        const termsRes = await getTermsPdfBuffer();
+        if (termsRes && termsRes.filename) {
+            termsDocName = termsRes.filename;
+        }
+
+        // 1. Send the PDF file directly to the contractor's chat so they can read and view it locally
         await sendTelegramDocument(
             chatId,
-            termsPdfPath,
+            termsRes.buffer,
             `📄 Documento Oficial: ${termsDocName}`,
             termsDocName
         );
