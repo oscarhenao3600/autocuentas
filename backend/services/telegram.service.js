@@ -217,47 +217,38 @@ const editTelegramMessage = async (chatId, messageId, text, inlineKeyboard, uiMo
  * Sends a binary document/archive by Telegram
  */
 const sendTelegramDocument = async (chatId, filePath, caption, customFilename = null) => {
-    if (!TELEGRAM_TOKEN || !filePath) return;
+    if (!TELEGRAM_TOKEN || !filePath) return null;
     try {
         const fileBuffer = Buffer.isBuffer(filePath) ? filePath : await storageService.getFileBuffer(filePath);
         if (!fileBuffer) {
             console.error('⚠️ Archivo no encontrado para enviar por Telegram:', filePath);
-            return;
+            return null;
         }
 
         let filename = customFilename || (typeof filePath === 'string' ? path.basename(filePath.replace(/\\/g, '/')) : 'documento.pdf') || 'documento.bin';
         if (filename.length > 100) filename = 'documento.bin';
 
-        const boundary = '----TelegramBotBoundary' + Date.now().toString(16);
-        const ext = path.extname(filename).toLowerCase();
-        let mime = 'application/octet-stream';
-        if (ext === '.zip') mime = 'application/zip';
-        else if (ext === '.docx') mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        else if (ext === '.pdf') mime = 'application/pdf';
+        const form = new FormData();
+        form.append('chat_id', String(chatId));
+        if (caption) form.append('caption', caption);
+        form.append('document', new Blob([fileBuffer]), filename);
 
-        const header = `--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`;
-        const footer = `\r\n--${boundary}--\r\n`;
-        
-        const headerBuffer = Buffer.from(header, 'utf-8');
-        const footerBuffer = Buffer.from(footer, 'utf-8');
-        const multipartBody = Buffer.concat([headerBuffer, fileBuffer, footerBuffer]);
-
-        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument?chat_id=${chatId}&caption=${encodeURIComponent(caption || '')}`, {
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument`, {
             method: 'POST',
-            headers: {
-                'Content-Type': `multipart/form-data; boundary=${boundary}`
-            },
-            body: multipartBody
+            body: form
         });
         
         const data = await response.json();
         if (!data.ok) {
             console.error('⚠️ Error al enviar documento Telegram:', data.description);
+            return null;
         } else {
             console.log(`✅ Documento ${filename} enviado por Telegram con éxito.`);
+            return data.result;
         }
     } catch (err) {
         console.error('❌ Error en sendTelegramDocument:', err.message);
+        return null;
     }
 };
 
@@ -267,38 +258,31 @@ const sendTelegramDocument = async (chatId, filePath, caption, customFilename = 
 const sendTelegramMediaWithKeyboard = async (chatId, filePath, caption, inlineKeyboard = null) => {
     if (!TELEGRAM_TOKEN || !filePath) return null;
     try {
-        const fileBuffer = await storageService.getFileBuffer(filePath);
+        const fileBuffer = Buffer.isBuffer(filePath) ? filePath : await storageService.getFileBuffer(filePath);
         if (!fileBuffer) {
             console.error('⚠️ Media no encontrada para enviar por Telegram:', filePath);
             return null;
         }
 
-        let filename = path.basename(filePath.replace(/\\/g, '/')) || 'archivo.bin';
+        let filename = (typeof filePath === 'string' ? path.basename(filePath.replace(/\\/g, '/')) : 'archivo.bin') || 'archivo.bin';
         if (filename.length > 100) filename = 'archivo.bin';
 
         const ext = path.extname(filename).toLowerCase();
         const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
-
-        const boundary = '----TelegramMediaBoundary' + Date.now().toString(16);
-        let mime = isImage ? (ext === '.png' ? 'image/png' : 'image/jpeg') : 'application/pdf';
-        const fieldName = isImage ? 'photo' : 'document';
         const endpoint = isImage ? 'sendPhoto' : 'sendDocument';
+        const fieldName = isImage ? 'photo' : 'document';
 
-        const header = `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`;
-        const footer = `\r\n--${boundary}--\r\n`;
-        const multipartBody = Buffer.concat([Buffer.from(header, 'utf-8'), fileBuffer, Buffer.from(footer, 'utf-8')]);
-
-        let url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${endpoint}?chat_id=${chatId}&caption=${encodeURIComponent(caption || '')}`;
+        const form = new FormData();
+        form.append('chat_id', String(chatId));
+        if (caption) form.append('caption', caption);
         if (inlineKeyboard && inlineKeyboard.length > 0) {
-            url += `&reply_markup=${encodeURIComponent(JSON.stringify({ inline_keyboard: inlineKeyboard }))}`;
+            form.append('reply_markup', JSON.stringify({ inline_keyboard: inlineKeyboard }));
         }
+        form.append(fieldName, new Blob([fileBuffer]), filename);
 
-        const response = await fetch(url, {
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/${endpoint}`, {
             method: 'POST',
-            headers: {
-                'Content-Type': `multipart/form-data; boundary=${boundary}`
-            },
-            body: multipartBody
+            body: form
         });
 
         const data = await response.json();
@@ -2466,14 +2450,39 @@ const showTermsAndConditionsPrompt = async (chatId, cedula, messageId = null) =>
 
     const keyboard = [
         [{ text: '✅ Acepto los Términos y Continuar', callback_data: 'accept_terms_and_continue' }],
-        [{ text: '❌ No Acepto / Cancelar', callback_data: 'cancel_registration' }]
+        [
+            { text: '📄 Reenviar PDF', callback_data: 'resend_terms_pdf' },
+            { text: '❌ No Acepto / Cancelar', callback_data: 'cancel_registration' }
+        ]
     ];
 
     await sendTelegramKeyboardMessage(chatId, termsMsg, keyboard);
 };
 
+/**
+ * Sends the official Terms and Conditions PDF document directly on demand
+ */
+const sendTermsPdfDirectly = async (chatId) => {
+    try {
+        const termsRes = await getTermsPdfBuffer();
+        const termsDocName = termsRes.filename || 'Terminos-Condiciones-Autocuentas.pdf';
+        await sendTelegramDocument(
+            chatId,
+            termsRes.buffer,
+            `📄 Documento Oficial: ${termsDocName}\n\nTérminos, Condiciones y Política de Habeas Data de Autocuentas.`,
+            termsDocName
+        );
+    } catch (err) {
+        console.error('Error enviando términos directamente:', err);
+        await sendTelegramMessage(chatId, '❌ No fue posible enviar el documento de Términos y Condiciones en este momento.');
+    }
+};
+
     // Public / Registration callbacks (no existing user required)
-    if (data === 'start_registration') {
+    if (data === 'resend_terms_pdf') {
+        await sendTermsPdfDirectly(chatId);
+        return;
+    } else if (data === 'start_registration') {
         const session = sessions.get(chatId);
         const cedula = session?.tempCedula || '';
         await showTermsAndConditionsPrompt(chatId, cedula, messageId);
@@ -5482,6 +5491,16 @@ const handleIncomingMessage = async (message) => {
             return;
         }
         await showObligationsFlow(chatId, user);
+    } else if (
+        text === '/terminos' ||
+        text.toLowerCase() === 'terminos' ||
+        text.toLowerCase() === 'términos' ||
+        text.toLowerCase() === 'terminos y condiciones' ||
+        text.toLowerCase() === 'términos y condiciones' ||
+        text.toLowerCase() === 'habeas data'
+    ) {
+        await sendTermsPdfDirectly(chatId);
+        return;
     } else if (
         text === '/descargar' ||
         text.toLowerCase() === 'descargar' ||
