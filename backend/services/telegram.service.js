@@ -15,6 +15,7 @@ const { cleanCedula, isSeniorByCedula, getSeniorStatus, getEffectiveUiMode, form
 const { getTermsPdfBuffer } = require('../utils/terms_pdf');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '814479301';
 let lastUpdateId = 0;
 let isPolling = false;
 
@@ -777,7 +778,7 @@ const handleIncomingPaymentReceipt = async (chatId, message, user, media) => {
         const targetChatIds = Array.from(new Set([
             config.approvalTelegramChatId,
             ...(Array.isArray(config.approvalTelegramChatIds) ? config.approvalTelegramChatIds : []),
-            process.env.TELEGRAM_ADMIN_CHAT_ID
+            ADMIN_CHAT_ID
         ].map(id => id ? String(id).trim() : null).filter(Boolean)));
 
         if (targetChatIds.length > 0) {
@@ -5868,6 +5869,16 @@ const startTelegramPolling = async () => {
     poll();
 };
 
+/**
+ * Envía una notificación administrativa directa al TELEGRAM_ADMIN_CHAT_ID (814479301)
+ * independientemente del bot activo (producción o desarrollo).
+ */
+const notifyAdmin = async (message, options = {}) => {
+    const targetChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || ADMIN_CHAT_ID;
+    if (!targetChatId || !TELEGRAM_TOKEN) return null;
+    return await sendTelegramMessage(targetChatId, message, options);
+};
+
 module.exports = {
     startTelegramPolling,
     sendTelegramMessage,
@@ -5878,5 +5889,7 @@ module.exports = {
     handleCallbackQuery,
     checkAndAdvancePaymentStatus,
     getContractCurrentActiveAct,
+    notifyAdmin,
+    ADMIN_CHAT_ID,
     sessions
 };

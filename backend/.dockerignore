@@ -2,3 +2,10 @@ node_modules
 uploads
 generated
 .git
+.env
+.env.*
+*credentials*.json
+token*.json
+*service-account*.json
+*.bak
+

@@ -8,14 +8,28 @@ require('dotenv').config();
 
 const app = express();
 
+// Trust reverse proxy (Nginx) so Express and express-rate-limit read real client IPs
+app.set('trust proxy', 1);
+
 // Security Middlewares
 app.use(helmet({
     hsts: false,
     contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+    frameguard: { action: 'sameorigin' },
+    noSniff: true
 }));
+
+// CORS configuration: Allow localhost, LAN IPs, .local domains, or explicitly configured CLIENT_URL
+const allowedOriginRegex = /^(https?:\/\/(localhost|127\.0\.0\.1|.*\.local|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?)$/i;
 app.use(cors({
-    origin: true,
+    origin: (origin, callback) => {
+        if (!origin || allowedOriginRegex.test(origin) || (process.env.CLIENT_URL && origin === process.env.CLIENT_URL)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Bloqueado por política CORS'));
+        }
+    },
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' })); // Limit body size to prevent DoS

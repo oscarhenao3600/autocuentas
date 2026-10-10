@@ -42,19 +42,45 @@ class StorageService {
     }
 
     /**
-     * Resolves a local path on disk safely (backward compatibility)
+     * Resolves a local path on disk safely within permitted application directories (uploads, generated, templates).
+     * Prevents arbitrary file reads and path traversal attacks (e.g. leaking .env or system files).
      */
     resolveLocalPath(filePath) {
         if (!filePath || typeof filePath !== 'string') return null;
-        if (path.isAbsolute(filePath) && fs.existsSync(filePath)) return filePath;
-        if (fs.existsSync(filePath)) return path.resolve(filePath);
+        if (filePath.includes('\0')) return null;
 
-        const fromBackend = path.resolve(__dirname, '..', filePath);
-        if (fs.existsSync(fromBackend)) return fromBackend;
+        const backendRoot = path.resolve(__dirname, '..');
+        const allowedDirs = [
+            path.join(backendRoot, 'uploads'),
+            path.join(backendRoot, 'generated'),
+            path.join(backendRoot, 'templates')
+        ];
 
-        const normalized = filePath.replace(/\\/g, '/');
-        const fromBackendNorm = path.resolve(__dirname, '..', normalized);
-        if (fs.existsSync(fromBackendNorm)) return fromBackendNorm;
+        const rawClean = filePath.trim().replace(/^[\/\\]+/, '');
+        const candidates = [];
+
+        if (path.isAbsolute(filePath)) {
+            candidates.push(path.resolve(filePath));
+        }
+
+        // Relative candidates
+        candidates.push(path.resolve(backendRoot, rawClean));
+        candidates.push(path.resolve(backendRoot, 'uploads', rawClean));
+        candidates.push(path.resolve(backendRoot, 'generated', rawClean));
+
+        for (const candidate of candidates) {
+            try {
+                // Ensure candidate is strictly within one of the allowed directories
+                const isInsideAllowed = allowedDirs.some(allowedDir => {
+                    const relative = path.relative(allowedDir, candidate);
+                    return !relative.startsWith('..') && !path.isAbsolute(relative);
+                });
+
+                if (isInsideAllowed && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                    return candidate;
+                }
+            } catch (_) {}
+        }
 
         return null;
     }
